@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- The setup pane and the `/crew` Effort button start from your own file, so saving them never copies a repo's `effort: off` into it.
+- A failed start logs its reason as text.
+
 ## 0.7.1
 - Fix: the setup pane showed "undefined" for floor and ceiling when an older saved value lacked them. Both now say "(default)" at the defaults, and a reset button restores them.
 - Crew pane: new Autopilot panel with one row per part (replies, effort, new-chat model, subagents), each with its state and a button; Needs you moves up; usage meters get their own section; dividers between sections.

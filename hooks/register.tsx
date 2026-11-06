@@ -79,6 +79,8 @@ type Loop = { model: string; startedAt: number; lastAt: number; lastTool: string
 // ponytail: one session per process, so module-level context is enough.
 const ctx = {
   orders: parseOrders(DEFAULT_ORDERS),
+  // The person's own file alone: what the setup pane and the Effort button start from.
+  mine: parseOrders(DEFAULT_ORDERS),
   globalPath: '',
   cwd: '',
   turnStartedAt: 0,
@@ -157,7 +159,7 @@ async function writeSetting($: EngineInterface, pairs: Record<string, string>) {
   await loadOrders($)
 }
 const EFFORT_CHOICES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'off'] as const
-const effortChoice = () => (!ctx.orders.isEffortAuto ? 'off' : (ctx.orders.effortFixed ?? 'auto'))
+const effortChoice = () => (!ctx.mine.isEffortAuto ? 'off' : (ctx.mine.effortFixed ?? 'auto'))
 async function chooseEffort($: EngineInterface, choice: string) {
   await writeSetting($, { effort: choice })
   await setEffortAuto($, choice !== 'off')
@@ -193,6 +195,7 @@ async function loadOrders($: EngineInterface) {
     hasRepoOrders = true
   } catch {}
   ctx.orders = parseOrders(text, repo)
+  ctx.mine = parseOrders(text)
   await update($, vitals, v => ({ ...v, hasRepoOrders, cacheTtlMin: ctx.orders.cacheTtlMin }))
   if (!ctx.orders.isEffortAuto) await update($, effort, v => ({ ...v, isAuto: false }))
 }
@@ -329,7 +332,7 @@ const SETUP = 'setup'
 async function saveSetup($: EngineInterface) {
   const w = await read($, wizard)
   await writeSetting($, {
-    effort: w.effort ? (ctx.orders.effortFixed ?? 'auto') : 'off',
+    effort: w.effort ? (ctx.mine.effortFixed ?? 'auto') : 'off',
     'effort-min': w.min,
     'effort-max': w.max,
     subagents: w.subagents ? 'auto' : 'off',
@@ -340,7 +343,7 @@ async function saveSetup($: EngineInterface) {
   $.ui.toast('Saved to ~/.claude/standing-orders.md. /orders setup runs this again.')
 }
 const openSetup = async ($: EngineInterface) => {
-  const o = ctx.orders
+  const o = ctx.mine
   await update($, wizard, () => ({ effort: o.isEffortAuto, model: o.isModelAuto, subagents: o.isSubagentsAuto, min: o.effortMin, max: o.effortMax }))
   return $.ui.open({ id: SETUP, title: 'Standing orders setup', closeOnEscape: true })
 }
@@ -435,7 +438,7 @@ export const register: Register = on => {
 
     return r
   }).catch(($, e, next) => {
-    $.ui.log(`${NAME}: start failed: ${String(next.error)}`)
+    $.ui.log(`${NAME}: start failed (${next.error.kind}): ${next.error.message ?? 'no message'}`)
     return next(e)
   })
 
