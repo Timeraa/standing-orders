@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1
+- Fix: the setup pane showed "undefined" for floor and ceiling when an older saved value lacked them. Both now say "(default)" at the defaults, and a reset button restores them.
+- Crew pane: new Autopilot panel with one row per part (replies, effort, new-chat model, subagents), each with its state and a button; Needs you moves up; usage meters get their own section; dividers between sections.
+
 ## 0.7.0
 - Effort: `effort:` takes `auto`, `off` or a fixed level (no judge); `effort-min` / `effort-max` bound auto; `max` is opt-in. `/orders effort <level>|min|max`, an Effort cycle button in `/crew`, floor and ceiling in the setup pane.
 - Subagents: `subagents: auto` picks a model (Haiku allowed) and effort for each helper from its task; explicit choices win.

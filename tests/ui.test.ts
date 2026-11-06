@@ -53,7 +53,22 @@ test('the band and the crew pane draw', async ($: any, on: any) => {
     expect(await pane.find({ type: 'Button', label: /Pause/ })).toBeTruthy()
     expect(await pane.find({ type: 'Button', label: /Close/ })).toBeTruthy()
     expect(await pane.find({ type: 'Button', label: /Done/ })).toBeTruthy()
+    expect(await pane.find({ type: 'Button', text: /Turn (on|off)/ })).toBeTruthy()
+    expect(await pane.find({ type: 'Button', text: /⟳/ })).toBeTruthy()
     await pane.unmount()
+
+    // The setup pane never shows a blank range, even from an older saved value.
+    const setup = await $.ui.mount({
+      plugin: 'standing-orders',
+      surface,
+      component: 'Pane',
+      requestId: 'setup',
+      props: { title: 'Setup', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+    })
+    expect(await setup.find({ type: 'Button', text: /floor low \(default\)/ })).toBeTruthy()
+    expect(await setup.find({ type: 'Button', text: /ceiling xhigh \(default\)/ })).toBeTruthy()
+    expect(await setup.find({ type: 'Button', text: /undefined/ })).toBeFalsy()
+    await setup.unmount()
   }
 })
 
@@ -95,7 +110,7 @@ test('the refresh fills the band from usage and agents, and offers /orders init'
   })
   expect((await band.find({ type: 'Text', text: /orders init/ }))?.text).toContain('no repo orders')
   expect((await band.find({ type: 'Text', text: /ctx/ }))?.text).toContain('ctx 63%')
-  expect((await band.find({ type: 'Button', label: /agents/ }))).toBeTruthy()
+  expect((await band.find({ type: 'Button', text: /agents/ }))).toBeTruthy()
   await band.unmount()
   expect(ran).toBe(0) // nothing is run on the machine
 })

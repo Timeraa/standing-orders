@@ -736,7 +736,9 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: SETUP }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const w = await read($, wizard)
+    const stored = await read($, wizard)
+    // A value saved by an older version may lack the range: fall back to the defaults.
+    const w = { ...stored, min: stored.min ?? 'low', max: stored.max ?? 'xhigh' }
     const flip = (k: 'effort' | 'model' | 'subagents') => () => update($, wizard, v => ({ ...v, [k]: !v[k] }))
     const row = (k: 'effort' | 'model' | 'subagents', title: string, color: string, text: string) => (
       <Box flexDirection="column">
@@ -758,12 +760,13 @@ export const register: Register = on => {
         {w.effort && (
           <Box>
             <Text>    Range  </Text>
-            <Button key="min" label={`floor ${w.min}`} onPress={() => update($, wizard, v => ({ ...v, min: cycleOf(v.min, ['low', 'medium', 'high']) }))} />
+            <Button key="min" label={`floor ${w.min}${w.min === 'low' ? ' (default)' : ''}`} onPress={() => update($, wizard, v => ({ ...v, min: cycleOf(v.min ?? 'low', ['low', 'medium', 'high']) }))} />
             <Text>  </Text>
-            <Button key="max" label={`ceiling ${w.max}`} onPress={() => update($, wizard, v => ({ ...v, max: cycleOf(v.max, ['medium', 'high', 'xhigh', 'max']) }))} />
-            <Text dimColor>  max costs the most; it is never picked unless you set the ceiling to it.</Text>
+            <Button key="max" label={`ceiling ${w.max}${w.max === 'xhigh' ? ' (default)' : ''}`} onPress={() => update($, wizard, v => ({ ...v, max: cycleOf(v.max ?? 'xhigh', ['medium', 'high', 'xhigh', 'max']) }))} />
+            <Button key="reset" label="  reset" onPress={() => update($, wizard, v => ({ ...v, min: 'low', max: 'xhigh' }))} />
           </Box>
         )}
+        <Text dimColor>Clicking a floor or ceiling steps through its levels and wraps around. max is only used if the ceiling is max.</Text>
         <Text color="yellow">Replies stay drafts until you run /orders auto. Always-ask words live in ~/.claude/standing-orders.md.</Text>
         <Box>
           <Button key="save" label="✓ Save" onPress={() => saveSetup($)} />
@@ -810,7 +813,7 @@ export const register: Register = on => {
     }
 
     // Lines left after the header, meters and buttons; sections fill them in order.
-    let room = Math.max(1, (e.viewport?.rows ?? 24) - 7)
+    let room = Math.max(1, (e.viewport?.rows ?? 24) - 13)
     const take = <T,>(items: T[], perItem = 1, head = 1) => {
       const n = Math.max(0, Math.min(items.length, Math.floor((room - head) / perItem)))
       if (n > 0) room -= head + n * perItem
@@ -823,41 +826,64 @@ export const register: Register = on => {
     const done = take(tree.filter(isDone), 1)
     const heading = (t: string, color?: string) => <Text bold color={color}>{t}</Text>
 
-    return (
-      <Box flexDirection="column" gap={1}>
-        <Box flexDirection="column">
-          <Box justifyContent="space-between">
-            <Text bold color={paused ? 'yellow' : m === 'auto' ? 'green' : 'cyan'}>
-              {paused ? '⏸ Paused' : m === 'auto' ? '▶ Auto' : '✎ Draft'}
-              <Text dimColor> · answered {s.autoCount} of {ctx.orders.maxAuto}</Text>
-            </Text>
-            <Button key="close" role="dismiss" label="✕ Close" onPress={() => closeCrew($)} />
-          </Box>
-          <Text color={ev.level ? EFFORT_COLOR[ev.level] : undefined} dimColor={!ev.level}>
-            effort {ev.isAuto ? 'auto' : 'yours'}{ev.level ? ` · ${ev.level}` : ''}{ev.why && ev.isAuto && ev.why !== 'auto' ? ` (${ev.why})` : ''}
-          </Text>
+    const line = <Text dimColor>{'─'.repeat(Math.min(width, 72))}</Text>
+    const o = ctx.orders
+    const effortNow = ev.level ? ` · now ${cap(ev.level)}${ev.isAuto && ev.why && ev.why !== 'auto' ? ` (${ev.why})` : ''}` : ''
+    const control = (icon: string, name: string, color: string, value: string, buttons: any) => (
+      <Box justifyContent="space-between">
+        <Box flexShrink={1}>
+          <Text color={color} bold>{icon} {name.padEnd(10)}</Text>
+          <Text wrap="truncate-end">{value}</Text>
         </Box>
-
-        {(Object.keys(tl.effort).length > 0 || Object.keys(tl.models).length > 0 || tl.subagents > 0) && (
-          <Text dimColor>
-            this session ·{Object.entries(tl.effort).map(([k, n]) => ` ${k} ×${n}`).join('')}
-            {Object.keys(tl.models).length > 0 ? ` · models${Object.entries(tl.models).map(([k, n]) => ` ${k} ×${n}`).join('')}` : ''}
-            {tl.subagents > 0 ? ` · ${tl.subagents} subagents steered` : ''}
-          </Text>
-        )}
-
+        <Box flexShrink={0}>{buttons}</Box>
+      </Box>
+    )
+    const onOff = (isOn: boolean, key: 'model' | 'subagents') => (
+      <Button key={key} label={isOn ? 'Turn off' : 'Turn on'} onPress={() => writeSetting($, { [key]: isOn ? 'off' : 'auto' })} />
+    )
+    const usage = (
+      <Box flexDirection="column" gap={1}>
+        {line}
         <Box flexDirection="column">
+          {heading('Usage', 'cyan')}
           {meter('context', v.contextPercent)}
           {meter('limit  ', v.ratePercent)}
           {left !== null && <Text color={left <= 0 ? 'yellow' : 'cyan'}>{left <= 0 ? 'cache cold: a reply now rewrites it' : `cache   ${clock(left)} left`}</Text>}
+          {(Object.keys(tl.effort).length > 0 || Object.keys(tl.models).length > 0 || tl.subagents > 0) && (
+            <Text dimColor>
+              this session ·{Object.entries(tl.effort).map(([k, n]) => ` ${k} ×${n}`).join('')}
+              {Object.keys(tl.models).length > 0 ? ` · models${Object.entries(tl.models).map(([k, n]) => ` ${k} ×${n}`).join('')}` : ''}
+              {tl.subagents > 0 ? ` · ${tl.subagents} subagents steered` : ''}
+            </Text>
+          )}
+        </Box>
+      </Box>
+    )
+
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Box justifyContent="space-between">
+          <Text bold color={paused ? 'yellow' : m === 'auto' ? 'green' : 'cyan'}>
+            {paused ? '⏸ Paused' : m === 'auto' ? '▶ Auto' : '✎ Draft'}
+            <Text dimColor> · answered {s.autoCount} of {o.maxAuto}</Text>
+          </Text>
+          <Button key="close" role="dismiss" label="✕ Close" onPress={() => closeCrew($)} />
         </Box>
 
-        <Box>
-          <Button key="pause" label={paused ? '▶ Resume' : '⏸ Pause'} onPress={() => setPaused($, !paused)} />
-          <Text>  </Text>
-          <Button key="mode" label={m === 'auto' ? 'Switch to draft' : 'Switch to auto'} onPress={() => setMode($, m === 'auto' ? 'draft' : 'auto')} />
-          <Text>  </Text>
-          <Button key="effort" label={`Effort: ${ev.isAuto ? effortChoice() : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />
+        <Box flexDirection="column">
+          {heading('Autopilot', 'magenta')}
+          {control('✎', 'Replies', paused ? 'yellow' : m === 'auto' ? 'green' : 'cyan', paused ? 'paused' : m === 'auto' ? 'sent for you' : 'answers wait for your Enter', (
+            <>
+              <Button key="mode" label={m === 'auto' ? 'Draft' : 'Auto'} onPress={() => setMode($, m === 'auto' ? 'draft' : 'auto')} />
+              <Text> </Text>
+              <Button key="pause" label={paused ? '▶ Resume' : '⏸ Pause'} onPress={() => setPaused($, !paused)} />
+            </>
+          ))}
+          {control('◆', 'Effort', ev.level ? EFFORT_COLOR[ev.level] ?? 'magenta' : 'magenta',
+            `${!ev.isAuto ? 'yours' : o.effortFixed ? `${o.effortFixed} (fixed)` : `auto ${o.effortMin}–${o.effortMax}`}${effortNow}`,
+            <Button key="effort" label={`⟳ ${ev.isAuto ? effortChoice() : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />)}
+          {control('◇', 'New chats', 'blue', o.isModelAuto ? `auto · ${o.models.join(' / ')}` : 'your /model', onOff(o.isModelAuto, 'model'))}
+          {control('◇', 'Subagents', 'cyan', o.isSubagentsAuto ? 'auto · model + effort per task' : 'inherit the chat', onOff(o.isSubagentsAuto, 'subagents'))}
         </Box>
 
         {asks.length + todo.length > 0 ? (
@@ -879,6 +905,8 @@ export const register: Register = on => {
         ) : (
           <Text color="green">✓ Nothing needs you.</Text>
         )}
+
+        {usage}
 
         <Box flexDirection="column">
           {heading(`Agents · ${rows.length - 1}`, 'magenta')}
