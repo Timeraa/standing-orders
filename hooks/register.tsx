@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { CrewRow, EffortView, LogEntry, Run, Vitals } from '../types'
+import type { Counts, CrewRow, EffortView, LogEntry, Run, Vitals } from '../types'
 import {
   DEFAULT_ORDERS,
   HELP,
@@ -15,7 +15,12 @@ import {
   asked,
   bar,
   fit,
+  EFFORTS,
+  SUBAGENT_JUDGE,
   capEffort,
+  clampEffort,
+  parseSubagent,
+  subagentModels,
   clock,
   isFollowUp,
   logBody,
@@ -57,7 +62,15 @@ const vitals = atom({ plugin: 'standing-orders', key: 'vitals' } as const, {
   hasRepoOrders: true,
 } as Vitals)
 // First-run wizard choices; saved to the orders file's settings.
-const wizard = atom({ plugin: 'standing-orders', key: 'wizard' } as const, { effort: true, model: true })
+const wizard = atom({ plugin: 'standing-orders', key: 'wizard' } as const, {
+  effort: true,
+  model: true,
+  subagents: true,
+  min: 'low' as Effort,
+  max: 'xhigh' as Effort,
+})
+// What the mod did this session: counts only, never stored.
+const counts = atom({ plugin: 'standing-orders', key: 'counts' } as const, { effort: {}, models: {}, subagents: 0 } as Counts)
 const crew = atom({ plugin: 'standing-orders', key: 'crew' } as const, [] as CrewRow[])
 const log = atom({ plugin: 'standing-orders', key: 'log' } as const, [] as LogEntry[])
 
@@ -85,6 +98,8 @@ const ctx = {
   isModelChecked: false,
   modelJob: null as Promise<{ model: ModelName; why: string } | null> | null,
   chatModel: null as { base: string; id: string } | null,
+  // subagents: the effort picked at spawn, by agent id
+  agentEffort: new Map<string, Effort>(),
 }
 
 // A turn this long that ends without a question still tells the person.
@@ -125,6 +140,27 @@ async function setMode($: EngineInterface, m: 'draft' | 'auto') {
 async function setEffortAuto($: EngineInterface, isAuto: boolean) {
   await update($, effort, v => ({ ...v, isAuto, why: isAuto ? 'auto' : 'yours' }))
   if (!isAuto) ctx.turnEffort = null
+}
+const tally = ($: EngineInterface, kind: 'effort' | 'models', key: string) =>
+  update($, counts, c => ({ ...c, [kind]: { ...c[kind], [key]: (c[kind][key] ?? 0) + 1 } }))
+
+// The settings file is the source of truth: buttons and commands write to it.
+async function writeSetting($: EngineInterface, pairs: Record<string, string>) {
+  let text: string
+  try {
+    text = await $.fs.read(ctx.globalPath)
+  } catch {
+    text = DEFAULT_ORDERS
+  }
+  for (const [k, v] of Object.entries(pairs)) text = setSetting(text, k, v)
+  await $.fs.write(ctx.globalPath, text)
+  await loadOrders($)
+}
+const EFFORT_CHOICES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'off'] as const
+const effortChoice = () => (!ctx.orders.isEffortAuto ? 'off' : (ctx.orders.effortFixed ?? 'auto'))
+async function chooseEffort($: EngineInterface, choice: string) {
+  await writeSetting($, { effort: choice })
+  await setEffortAuto($, choice !== 'off')
 }
 async function setChecks($: EngineInterface, next: (old: string[]) => string[]) {
   const list = await update($, checks, next)
@@ -169,7 +205,12 @@ async function addChecks($: EngineInterface, found: readonly unknown[] | undefin
 async function wait($: EngineInterface, decision: string) {
   await update($, run, s => ({ ...s, pending: decision }))
   await note($, 'asked', decision)
-  await $.ui.notify(decision, { title: 'Claude needs you' })
+  const sofar = (await read($, log))
+    .filter(l => l.kind === 'answered' || l.kind === 'drafted')
+    .slice(-3)
+    .map(l => fit(l.text, 40))
+    .join(' · ')
+  await $.ui.notify(sofar ? `${decision}\nSo far: ${sofar}` : decision, { title: 'Claude needs you' })
 }
 
 async function judge($: EngineInterface, answer: string, durationMs: number) {
@@ -247,7 +288,8 @@ async function pickEffort($: EngineInterface): Promise<void> {
   const picked = await Promise.race([job, timeout]).catch(() => null)
   const saving = (await read($, effort)).isSaving
   if (picked) {
-    ctx.turnEffort = capEffort(picked.effort, saving ? 'medium' : 'xhigh')
+    const { effortMin, effortMax } = ctx.orders
+    ctx.turnEffort = clampEffort(picked.effort, effortMin, saving ? capEffort(effortMax, 'medium') : effortMax)
     await update($, effort, v => ({ ...v, why: picked.why, isJudging: false }))
   } else {
     await update($, effort, v => ({ ...v, why: 'judge slow: kept', isJudging: false }))
@@ -276,6 +318,7 @@ async function pickModel($: EngineInterface, base: string) {
   const picked = await Promise.race([job, $.clock.sleep(3000).then(() => null)]).catch(() => null)
   if (!picked || shortModel(base) === picked.model) return
   ctx.chatModel = { base, id: MODEL_IDS[picked.model] }
+  void tally($, 'models', picked.model)
   $.ui.toast(`Auto model: this chat runs on ${cap(picked.model)} (${picked.why}). /model changes it; /orders model off stops this.`)
 }
 
@@ -284,19 +327,22 @@ async function pickModel($: EngineInterface, base: string) {
 const SETUP = 'setup'
 async function saveSetup($: EngineInterface) {
   const w = await read($, wizard)
-  let text: string
-  try {
-    text = await $.fs.read(ctx.globalPath)
-  } catch {
-    text = DEFAULT_ORDERS
-  }
-  text = setSetting(setSetting(text, 'effort', w.effort ? 'auto' : 'off'), 'model', w.model ? 'auto' : 'off')
-  await $.fs.write(ctx.globalPath, text)
-  await loadOrders($)
+  await writeSetting($, {
+    effort: w.effort ? (ctx.orders.effortFixed ?? 'auto') : 'off',
+    'effort-min': w.min,
+    'effort-max': w.max,
+    subagents: w.subagents ? 'auto' : 'off',
+    model: w.model ? 'auto' : 'off',
+  })
+  await setEffortAuto($, w.effort)
   await $.ui.close({ id: SETUP })
   $.ui.toast('Saved to ~/.claude/standing-orders.md. /orders setup runs this again.')
 }
-const openSetup = ($: EngineInterface) => $.ui.open({ id: SETUP, title: 'Standing orders setup', closeOnEscape: true })
+const openSetup = async ($: EngineInterface) => {
+  const o = ctx.orders
+  await update($, wizard, () => ({ effort: o.isEffortAuto, model: o.isModelAuto, subagents: o.isSubagentsAuto, min: o.effortMin, max: o.effortMax }))
+  return $.ui.open({ id: SETUP, title: 'Standing orders setup', closeOnEscape: true })
+}
 
 // ---- vitals and crew ----------------------------------------------------
 
@@ -355,6 +401,8 @@ async function tick($: EngineInterface) {
 
 const ago = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`)
 const shortModel = (m: string) => /(haiku|sonnet|opus|fable)/i.exec(m)?.[1]?.toLowerCase() ?? (m || '?')
+// The next value in a cycle; a value outside it starts over.
+const cycleOf = <T,>(cur: T, list: readonly T[]) => list[(list.indexOf(cur) + 1) % list.length] as T
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 // Meters run green, yellow, red; effort runs cool to hot.
 const heat = (percent: number) => (percent >= 90 ? 'red' : percent >= 70 ? 'yellow' : 'green')
@@ -370,7 +418,7 @@ export const register: Register = on => {
     await update($, checks, () => (Array.isArray(saved) ? saved.map(String) : []))
     await $.command.register({
       name: 'orders',
-      description: 'Standing orders: status, help, setup, init, auto, draft, on, off, effort|model auto|off. Controls live in /crew',
+      description: 'Standing orders: status, help, setup, init, auto, draft, on, off, effort <level>|model auto|off. Controls live in /crew',
     })
     await $.command.register({ name: 'crew', description: 'Agents, what the orders did, things for you, and the controls' })
     if (!ctx.isTicking) {
@@ -413,9 +461,11 @@ export const register: Register = on => {
         else await loadOrders($)
 
         const ev = await read($, effort)
-        if (ev.isAuto && !isDraftSent && !isFollowUp(e.text)) {
+        if (ev.isAuto && !ctx.orders.effortFixed && !isDraftSent && !isFollowUp(e.text)) {
           ctx.effortJob = judgeEffort($, e.text)
           await update($, effort, v => ({ ...v, isJudging: true }))
+        } else if (ev.isAuto && ctx.orders.effortFixed) {
+          await update($, effort, v => ({ ...v, why: 'fixed' }))
         } else if (ev.isAuto) {
           await update($, effort, v => ({ ...v, why: 'kept for a follow-up' }))
         }
@@ -438,7 +488,9 @@ export const register: Register = on => {
     const now = await $.clock.now()
     if (e.agentId !== undefined) {
       loopOf(e.agentId, now).model = e.model
-      return yield* next(e)
+      const picked = ctx.agentEffort.get(e.agentId)
+      const isSteerable = picked && typeof e.effort === 'string' && takesEffort(e.model)
+      return yield* next(isSteerable ? { ...e, effort: picked } : e)
     }
     loopOf('main', now).model = e.model
 
@@ -459,11 +511,12 @@ export const register: Register = on => {
         ev = await update($, effort, v => ({ ...v, isAuto: false, isJudging: false, why: 'yours' }))
         $.ui.toast('You changed effort yourself: auto effort is off. /orders effort auto turns it back on.')
       }
-      if (ev.isAuto && takesEffort(model)) await pickEffort($)
+      if (ev.isAuto && !ctx.orders.effortFixed && takesEffort(model)) await pickEffort($)
     }
 
-    const level = ev.isAuto && takesEffort(model) ? ctx.turnEffort : null
+    const level = ev.isAuto && takesEffort(model) ? (ctx.orders.effortFixed ?? ctx.turnEffort) : null
     if (level) ctx.lastApplied = level
+    if (level && e.index === 0) void tally($, 'effort', level)
     await update($, effort, v => ({ ...v, level: level ?? (e.effort === undefined ? null : String(e.effort)) }))
 
     const r = yield* next({ ...e, ...(level ? { effort: level } : {}), ...(ctx.chatModel ? { model } : {}) })
@@ -471,6 +524,34 @@ export const register: Register = on => {
     await update($, vitals, v => ({ ...v, now: done, lastResponseAt: done }))
     return r
   })
+
+  on('agent.spawn', async ($, e, next) => {
+    const ev = e as unknown as { prompt: string; subagentType: string; fork?: boolean; isTeammate?: boolean; workflow?: unknown; model?: string }
+    if (!ctx.orders.isSubagentsAuto || ev.fork || ev.isTeammate || ev.workflow) return next(e)
+    const allowed = subagentModels(ctx.orders.models)
+    const pick = await Promise.race([
+      $.model
+        .complete({
+          model: 'haiku',
+          system: SUBAGENT_JUDGE,
+          prompt: `ALLOWED MODELS: ${allowed.join(', ')}\n\nSUBAGENT TYPE: ${ev.subagentType}\nTASK:\n${String(ev.prompt).slice(0, 2000)}`,
+          maxTokens: 80,
+          timeoutMs: 3000,
+        })
+        .then(r => (r.isAnswered ? parseSubagent(r.text, allowed) : null)),
+      $.clock.sleep(3000).then(() => null),
+    ]).catch(() => null)
+    if (!pick) return next(e)
+    // A model the Agent call already named wins; only the gap is filled.
+    const result = await next(ev.model ? e : ({ ...e, model: pick.model } as typeof e))
+    const id = (result as { agentId?: string }).agentId
+    if (id) {
+      ctx.agentEffort.set(id, clampEffort(pick.effort, ctx.orders.effortMin, ctx.orders.effortMax))
+      await update($, counts, c => ({ ...c, subagents: c.subagents + 1 }))
+      void tally($, 'models', shortModel(String((result as { model?: string }).model ?? pick.model)))
+    }
+    return result
+  }).catch(($, e, next) => next(e)) // never block a spawn
 
   on('tool.call', async ($, e, next) => {
     const l = loopOf(e.agentId ?? 'main', await $.clock.now())
@@ -521,15 +602,25 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'orders' }, async ($, e) => {
-    const [arg = '', sub = ''] = e.args.trim().toLowerCase().split(/\s+/)
+    const [arg = '', sub = '', ...rest] = e.args.trim().toLowerCase().split(/\s+/)
     if (arg === 'help' || arg === '?') return { text: HELP }
     if (arg === 'effort') {
-      const isAuto = sub !== 'off'
-      await setEffortAuto($, isAuto)
+      if (sub === 'min' || sub === 'max') {
+        const v = rest[0] ?? ''
+        if (!EFFORTS.includes(v as Effort)) return { text: `Usage: /orders effort ${sub} ${EFFORTS.join('|')}` }
+        await writeSetting($, { [`effort-${sub}`]: v })
+        return { text: `Auto effort ${sub === 'min' ? 'floor' : 'ceiling'}: ${v}.` }
+      }
+      const choice = sub === '' ? 'auto' : sub
+      if (!(EFFORT_CHOICES as readonly string[]).includes(choice)) return { text: `Usage: /orders effort ${EFFORT_CHOICES.join('|')} | min <level> | max <level>` }
+      await chooseEffort($, choice)
       return {
-        text: isAuto
-          ? 'Auto effort on: Haiku picks low to xhigh for each prompt you type (Opus and Sonnet 5.5 only; mid-chat the model never changes).'
-          : 'Auto effort off: your own effort setting stands.',
+        text:
+          choice === 'auto'
+            ? `Auto effort on: Haiku picks ${ctx.orders.effortMin} to ${ctx.orders.effortMax} for each prompt you type (Opus and Sonnet 5.5 only; mid-chat the model never changes).`
+            : choice === 'off'
+              ? 'Auto effort off: your own effort setting stands.'
+              : `Effort fixed at ${choice} (Opus and Sonnet 5.5 only), no judge.`,
       }
     }
     if (arg === 'setup') {
@@ -538,10 +629,7 @@ export const register: Register = on => {
     }
     if (arg === 'model') {
       const isAuto = sub !== 'off'
-      let text: string
-      try { text = await $.fs.read(ctx.globalPath) } catch { text = DEFAULT_ORDERS }
-      await $.fs.write(ctx.globalPath, setSetting(text, 'model', isAuto ? 'auto' : 'off'))
-      await loadOrders($)
+      await writeSetting($, { model: isAuto ? 'auto' : 'off' })
       return {
         text: isAuto
           ? `Auto model on: a brand-new chat picks its model (${ctx.orders.models.join(', ')}) from your first message. Never mid-chat.`
@@ -576,7 +664,7 @@ export const register: Register = on => {
       const list = await read($, checks)
       return { text: list.length ? list.map(c => `- ${c}`).join('\n') : 'No checks waiting.' }
     }
-    if (arg !== '') return { text: 'Usage: /orders [help | setup | init | auto | draft | on | off | effort auto|off | model auto|off]. Details and controls: /crew' }
+    if (arg !== '') return { text: 'Usage: /orders [help | setup | init | auto | draft | on | off | effort auto|off|<level>|min|max | model auto|off]. Details and controls: /crew' }
     const s = await read($, run)
     const ev = await read($, effort)
     return {
@@ -649,8 +737,8 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: SETUP }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const w = await read($, wizard)
-    const flip = (k: 'effort' | 'model') => () => update($, wizard, v => ({ ...v, [k]: !v[k] }))
-    const row = (k: 'effort' | 'model', title: string, color: string, text: string) => (
+    const flip = (k: 'effort' | 'model' | 'subagents') => () => update($, wizard, v => ({ ...v, [k]: !v[k] }))
+    const row = (k: 'effort' | 'model' | 'subagents', title: string, color: string, text: string) => (
       <Box flexDirection="column">
         <Box>
           <Text color={w[k] ? 'green' : 'gray'} bold>{w[k] ? '● ' : '○ '}</Text>
@@ -666,6 +754,16 @@ export const register: Register = on => {
         <Text bold color="magenta">Two helpers · click to toggle</Text>
         {row('effort', 'Auto effort', 'magenta', 'Picks low to xhigh thinking for every prompt you type.')}
         {row('model', 'Auto model for new chats', 'blue', 'Sonnet or Opus from your first message, only while the chat is empty (cache-safe).')}
+        {row('subagents', 'Auto subagents', 'cyan', 'Picks a model (Haiku for mechanical work) and effort for each helper from its task. Anything you named wins.')}
+        {w.effort && (
+          <Box>
+            <Text>    Range  </Text>
+            <Button key="min" label={`floor ${w.min}`} onPress={() => update($, wizard, v => ({ ...v, min: cycleOf(v.min, ['low', 'medium', 'high']) }))} />
+            <Text>  </Text>
+            <Button key="max" label={`ceiling ${w.max}`} onPress={() => update($, wizard, v => ({ ...v, max: cycleOf(v.max, ['medium', 'high', 'xhigh', 'max']) }))} />
+            <Text dimColor>  max costs the most; it is never picked unless you set the ceiling to it.</Text>
+          </Box>
+        )}
         <Text color="yellow">Replies stay drafts until you run /orders auto. Always-ask words live in ~/.claude/standing-orders.md.</Text>
         <Box>
           <Button key="save" label="✓ Save" onPress={() => saveSetup($)} />
@@ -678,9 +776,9 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const [rows, v, s, list, paused, m, ev, entries] = await Promise.all([
+    const [rows, v, s, list, paused, m, ev, entries, tl] = await Promise.all([
       read($, crew), read($, vitals), read($, run), read($, checks),
-      read($, isPaused), read($, mode), read($, effort), read($, log),
+      read($, isPaused), read($, mode), read($, effort), read($, log), read($, counts),
     ])
     const width = Math.max(30, e.props.bodyColumns ?? 60)
     const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
@@ -740,6 +838,14 @@ export const register: Register = on => {
           </Text>
         </Box>
 
+        {(Object.keys(tl.effort).length > 0 || Object.keys(tl.models).length > 0 || tl.subagents > 0) && (
+          <Text dimColor>
+            this session ·{Object.entries(tl.effort).map(([k, n]) => ` ${k} ×${n}`).join('')}
+            {Object.keys(tl.models).length > 0 ? ` · models${Object.entries(tl.models).map(([k, n]) => ` ${k} ×${n}`).join('')}` : ''}
+            {tl.subagents > 0 ? ` · ${tl.subagents} subagents steered` : ''}
+          </Text>
+        )}
+
         <Box flexDirection="column">
           {meter('context', v.contextPercent)}
           {meter('limit  ', v.ratePercent)}
@@ -751,7 +857,7 @@ export const register: Register = on => {
           <Text>  </Text>
           <Button key="mode" label={m === 'auto' ? 'Switch to draft' : 'Switch to auto'} onPress={() => setMode($, m === 'auto' ? 'draft' : 'auto')} />
           <Text>  </Text>
-          <Button key="effort" label={ev.isAuto ? 'Effort: take over' : 'Effort: auto'} onPress={() => setEffortAuto($, !ev.isAuto)} />
+          <Button key="effort" label={`Effort: ${ev.isAuto ? effortChoice() : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />
         </Box>
 
         {asks.length + todo.length > 0 ? (

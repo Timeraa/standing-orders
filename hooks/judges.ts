@@ -31,6 +31,9 @@ Claude write that repo's own .claude/standing-orders.md.
 always-ask: production, prod, deploy, release, merge into main, merge to main, merge into stable, force push, force-push, delete, drop, secret, credential, payment, App Store, TestFlight, submit for review
 max-auto: 8
 effort: auto
+effort-min: low
+effort-max: xhigh
+subagents: auto
 model: auto
 models: sonnet, opus
 cache-ttl: 60
@@ -115,8 +118,8 @@ Reply with JSON only: {"model":"<one of the allowed models>","why":"at most 6 wo
 - The strongest allowed model for hard debugging, architecture, large refactors, deep research, or ambiguous open-ended work.
 When unsure, pick the stronger one.`
 
-export type Effort = 'low' | 'medium' | 'high' | 'xhigh'
-export const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh']
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
 export type Orders = {
   text: string
@@ -124,6 +127,11 @@ export type Orders = {
   terms: string[]
   maxAuto: number
   isEffortAuto: boolean
+  /** A fixed level from `effort: <level>`: no judge, every prompt runs at it. */
+  effortFixed: Effort | null
+  effortMin: Effort
+  effortMax: Effort
+  isSubagentsAuto: boolean
   isModelAuto: boolean
   models: ModelName[]
   cacheTtlMin: number
@@ -161,6 +169,11 @@ export function parseModel(text: string, allowed: readonly ModelName[]): { model
   return allowed.includes(model) ? { model, why: String(v?.why ?? '').slice(0, 60) } : null
 }
 
+const level = (raw: string | undefined): Effort | null => {
+  const e = (raw ?? '').toLowerCase() as Effort
+  return EFFORTS.includes(e) ? e : null
+}
+
 export function parseOrders(text: string): Orders {
   // always-ask lines add up: the repo's words join the global ones.
   const terms = [
@@ -181,6 +194,10 @@ export function parseOrders(text: string): Orders {
     rail: escaped.length ? new RegExp(`\\b(${escaped.join('|')})\\b`, 'i') : null,
     maxAuto: num(setting(text, 'max-auto'), 8),
     isEffortAuto: (setting(text, 'effort') ?? 'auto').toLowerCase() !== 'off',
+    effortFixed: level(setting(text, 'effort')),
+    effortMin: level(setting(text, 'effort-min')) ?? 'low',
+    effortMax: level(setting(text, 'effort-max')) ?? 'xhigh',
+    isSubagentsAuto: (setting(text, 'subagents') ?? 'off').toLowerCase() === 'auto',
     isModelAuto: (setting(text, 'model') ?? 'off').toLowerCase() === 'auto',
     models: parseModels(setting(text, 'models')),
     cacheTtlMin: num(setting(text, 'cache-ttl'), 60),
@@ -221,6 +238,32 @@ export function asked(tail: string) {
 // Effort per message rewrites most of the prompt cache on other models, so the
 // mod only sets it on the models where it does not.
 export const takesEffort = (model: string) => /(opus|sonnet)-5-5/i.test(model)
+
+export const clampEffort = (e: Effort, min: Effort, max: Effort) => {
+  const i = EFFORTS.indexOf(e)
+  const lo = EFFORTS.indexOf(min)
+  const hi = Math.max(lo, EFFORTS.indexOf(max))
+  return EFFORTS[Math.min(hi, Math.max(lo, i))] ?? e
+}
+
+// The models a subagent may use: the chat's allowlist plus Haiku for mechanical work.
+export const subagentModels = (models: readonly ModelName[]): ModelName[] => [...new Set<ModelName>(['haiku', ...models])]
+
+export const SUBAGENT_JUDGE = `You pick the model and thinking effort for a helper subagent of an AI coding agent, from the task it was given.
+Reply with JSON only: {"model":"<one allowed model>","effort":"low"|"medium"|"high"|"xhigh","why":"at most 6 words"}
+- haiku (if allowed) and low: searching, listing, reading files, grepping, mechanical edits, summaries.
+- a middle model and medium: focused implementation or a bounded investigation.
+- the strongest allowed model and high or xhigh: review, architecture, hard debugging, anything where a wrong answer is costly.
+When unsure, pick the stronger one.`
+
+export function parseSubagent(text: string, models: readonly ModelName[]): { model: ModelName; effort: Effort; why: string } | null {
+  const v = json(text)
+  const model = String(v?.model ?? '').toLowerCase() as ModelName
+  const effort = String(v?.effort ?? '').toLowerCase() as Effort
+  return models.includes(model) && EFFORTS.includes(effort)
+    ? { model, effort, why: String(v?.why ?? '').slice(0, 60) }
+    : null
+}
 
 export const capEffort = (e: Effort, cap: Effort) =>
   EFFORTS.indexOf(e) > EFFORTS.indexOf(cap) ? cap : e
@@ -324,14 +367,20 @@ model from your first message, among the models: line (default sonnet, opus).
 It happens once per chat, never mid-chat, so the cache is never rewritten. If you
 switch /model yourself, it stays out of the way. /orders model auto|off.
 
-Effort: Haiku picks low..xhigh for each prompt you type (Opus and Sonnet 5.5
-only; the model never changes, so the cache survives). A short go-ahead keeps
-the last level. Setting /effort yourself turns it off; /orders effort auto
-turns it back on.
+Effort: "effort: auto" lets Haiku pick low..xhigh for each prompt you type
+(Opus and Sonnet 5.5 only; mid-chat the model never changes, so the cache
+survives). "effort: high" (any level, even max) fixes it with no judge.
+effort-min / effort-max bound auto. A short go-ahead keeps the last level.
+Setting /effort yourself turns it off; /orders effort auto turns it back on.
+
+Subagents: with "subagents: auto", each helper subagent gets a model (Haiku
+allowed) and effort picked from its task. A model or effort you or Claude named
+for it always wins.
 
 Files:
 - ~/.claude/standing-orders.md: your rules for every repo, plus the settings
-  always-ask, max-auto, effort, model, models, cache-ttl. /orders setup
-  walks you through them. Claude sees edits in the next chat.
+  always-ask, max-auto, effort, effort-min, effort-max, subagents, model, models,
+  cache-ttl. /orders setup walks you through them. Claude sees edits in the
+  next chat.
 - .claude/standing-orders.md: this repo's additions, from /orders init. Its
   always-ask words add to yours; its other settings win.`

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+- Effort: `effort:` takes `auto`, `off` or a fixed level (no judge); `effort-min` / `effort-max` bound auto; `max` is opt-in. `/orders effort <level>|min|max`, an Effort cycle button in `/crew`, floor and ceiling in the setup pane.
+- Subagents: `subagents: auto` picks a model (Haiku allowed) and effort for each helper from its task; explicit choices win.
+- "Needs you" notifications add a "So far" line.
+- `/crew` shows per-session counts of efforts, models and steered subagents.
+
 ## 0.6.1
 - Colour: heat-coloured meters and effort, coloured section headings and mode badges, a livelier setup pane.
 

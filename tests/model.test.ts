@@ -74,3 +74,18 @@ test('settings helpers', () => {
   expect(setSetting('a: 1\nmodel: off\nb: 2\n', 'model', 'auto')).toBe('a: 1\nmodel: auto\nb: 2\n')
   expect(setSetting('a: 1', 'model', 'auto')).toBe('a: 1\nmodel: auto\n')
 })
+
+import { clampEffort, parseSubagent, subagentModels } from '../hooks/judges'
+
+test('effort range, fixed level and subagent helpers', () => {
+  expect(clampEffort('low', 'medium', 'high')).toBe('medium')
+  expect(clampEffort('xhigh', 'medium', 'high')).toBe('high')
+  expect(clampEffort('high', 'xhigh', 'medium')).toBe('xhigh') // a floor above the ceiling wins
+  const o = parseOrders('effort: high\neffort-min: medium\neffort-max: max\nsubagents: auto')
+  expect([o.effortFixed, o.effortMin, o.effortMax, o.isSubagentsAuto]).toEqual(['high', 'medium', 'max', true])
+  const d = parseOrders('effort: auto')
+  expect([d.effortFixed, d.effortMin, d.effortMax, d.isSubagentsAuto]).toEqual([null, 'low', 'xhigh', false])
+  expect(subagentModels(['sonnet', 'opus'])).toEqual(['haiku', 'sonnet', 'opus'])
+  expect(parseSubagent('{"model":"haiku","effort":"low","why":"search"}', ['haiku', 'opus'])?.effort).toBe('low')
+  expect(parseSubagent('{"model":"fable","effort":"low"}', ['haiku', 'opus'])).toBeNull()
+})

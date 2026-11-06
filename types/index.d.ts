@@ -24,6 +24,15 @@ export type EffortView = {
   isSaving: boolean
 }
 
+/** What the mod did this session, for the crew pane. */
+export type Counts = {
+  /** Prompts run at each effort level. */
+  effort: Record<string, number>
+  /** Models picked for new chats and subagents. */
+  models: Record<string, number>
+  subagents: number
+}
+
 /** Numbers the band shows, refreshed on a timer. */
 export type Vitals = {
   now: number
@@ -70,7 +79,8 @@ declare module 'claude-code' {
       checks: string[]
       effort: EffortView
       /** First-run setup choices, saved to the orders file's settings. */
-      wizard: { effort: boolean; model: boolean }
+      wizard: { effort: boolean; model: boolean; subagents: boolean; min: string; max: string }
+      counts: Counts
       vitals: Vitals
       crew: CrewRow[]
       log: LogEntry[]
