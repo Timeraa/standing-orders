@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.2
 - The setup pane and the `/crew` Effort button start from your own file, so saving them never copies a repo's `effort: off` into it.
 - A failed start logs its reason as text.
 
