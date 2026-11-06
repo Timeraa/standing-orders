@@ -411,16 +411,17 @@ const EFFORT_COLOR: Record<string, string> = { low: 'green', medium: 'cyan', hig
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const r = await next(e)
-    ctx.cwd = e.cwd
-    ctx.globalPath = `${(await $.env.get('HOME')) ?? ''}/.claude/standing-orders.md`
-    await loadOrders($)
-    const saved = await $.store.get(`checks:${ctx.cwd}`)
-    await update($, checks, () => (Array.isArray(saved) ? saved.map(String) : []))
+    // Commands first: whatever fails below, /orders and /crew still exist.
     await $.command.register({
       name: 'orders',
       description: 'Standing orders: status, help, setup, init, auto, draft, on, off, effort <level>|model auto|off. Controls live in /crew',
     })
     await $.command.register({ name: 'crew', description: 'Agents, what the orders did, things for you, and the controls' })
+    ctx.cwd = e.cwd
+    ctx.globalPath = `${(await $.env.get('HOME')) ?? ''}/.claude/standing-orders.md`
+    await loadOrders($)
+    const saved = await $.store.get(`checks:${ctx.cwd}`).catch(() => null)
+    await update($, checks, () => (Array.isArray(saved) ? saved.map(String) : []))
     if (!ctx.isTicking) {
       ctx.isTicking = true
       $.clock.every(5000, () => void tick($).catch(() => {}))
@@ -432,6 +433,9 @@ export const register: Register = on => {
     }
 
     return r
+  }).catch(($, e, next) => {
+    $.ui.log(`${NAME}: start failed: ${String(next.error)}`)
+    return next(e)
   })
 
   on('prompt.submit', async ($, e, next) => {
@@ -628,7 +632,8 @@ export const register: Register = on => {
       return { text: 'Setup opened.' }
     }
     if (arg === 'model') {
-      const isAuto = sub !== 'off'
+      if (sub !== 'auto' && sub !== 'off') return { text: 'Usage: /orders model auto|off' }
+      const isAuto = sub === 'auto'
       await writeSetting($, { model: isAuto ? 'auto' : 'off' })
       return {
         text: isAuto
@@ -753,7 +758,7 @@ export const register: Register = on => {
       <Box flexDirection="column" gap={1}>
         <Text bold color="cyan">✦ Standing orders · setup</Text>
         <Text>Claude stops asking things your rules already answer: it drafts the reply in your prompt box and you press Enter.</Text>
-        <Text bold color="magenta">Two helpers · click to toggle</Text>
+        <Text bold color="magenta">Three helpers · click to toggle</Text>
         {row('effort', 'Auto effort', 'magenta', 'Picks low to xhigh thinking for every prompt you type.')}
         {row('model', 'Auto model for new chats', 'blue', 'Sonnet or Opus from your first message, only while the chat is empty (cache-safe).')}
         {row('subagents', 'Auto subagents', 'cyan', 'Picks a model (Haiku for mechanical work) and effort for each helper from its task. Anything you named wins.')}
@@ -917,7 +922,7 @@ export const register: Register = on => {
           {heading('What the orders did', 'blue')}
           {recent.length > 0
             ? recent.map((l, i) => (
-                <Box key={i}>
+                <Box key={`log${i}`}>
                   <Text dimColor>{logHead(l, v.now)} </Text>
                   <Box flexShrink={1}>
                     <Text dimColor={l.kind !== 'asked'}>{logBody(l)}</Text>

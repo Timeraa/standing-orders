@@ -21,11 +21,12 @@ A clickable status line and a `/crew` pane show what it is doing. A first-run se
 ## Install
 
 ```
-/plugin marketplace add Timeraa/standing-orders
-/plugin install standing-orders@standing-orders
+/plugin install standing-orders --marketplace Timeraa/standing-orders
 ```
 
-Restart Claude Code. Needs a Claude Code version with mod (plugin) support.
+From a shell: `claude plugin install standing-orders --marketplace Timeraa/standing-orders`. In the desktop app: + next to the prompt box, Plugins, Add marketplace `Timeraa/standing-orders`, then Add plugin.
+
+Restart Claude Code. Tested on Claude Code 2.1.319. The mod API is early access, so a newer Claude Code can change it; CI runs the tests against the latest release.
 
 ## Why you can trust it
 
