@@ -78,6 +78,9 @@ const ctx = {
   mine: parseOrders(DEFAULT_ORDERS),
   globalPath: '',
   cwd: '',
+  // The two files as last loaded (null: missing), so the refresh notices an edit or a new repo file.
+  globalText: null as string | null,
+  repoText: null as string | null,
   // ponytail: a chat is one load of the mod (a /clear or reload starts a new one); its items are replaced together.
   chat: '',
   turnStartedAt: 0,
@@ -185,6 +188,8 @@ async function loadOrders($: EngineInterface) {
     repo = await $.fs.read(`${ctx.cwd}/${REPO_ORDERS}`)
     hasRepoOrders = true
   } catch {}
+  ctx.globalText = text
+  ctx.repoText = hasRepoOrders ? repo : null
   ctx.orders = parseOrders(text, repo)
   ctx.mine = parseOrders(text)
   await update($, vitals, v => ({ ...v, hasRepoOrders, cacheTtlMin: ctx.orders.cacheTtlMin }))
@@ -343,6 +348,13 @@ async function tick($: EngineInterface) {
     contextPercent: usage?.context.percent ?? v.contextPercent,
   }))
   await update($, effort, v => ({ ...v, isSaving: rate !== null && rate >= 85 }))
+
+  // Orders written since the last load (by Claude, an editor, the Write them button) take effect now.
+  const [g, r] = await Promise.all([
+    $.fs.read(ctx.globalPath).catch(() => null),
+    $.fs.read(`${ctx.cwd}/${REPO_ORDERS}`).catch(() => null),
+  ])
+  if (r !== ctx.repoText || (g !== null && g !== ctx.globalText)) await loadOrders($)
 
   const open = await read($, checks)
   if (liveChecks(open, now).length !== open.length) await setChecks($, old => liveChecks(old, now))

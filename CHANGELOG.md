@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.9.1
+- Orders written while a session runs (Claude writing the repo file after "Write them", or an edit to either file) now reach the pane within 5 seconds, instead of only after your next prompt.
+
 ## 0.9.0
 - `/crew` is now `/autopilot` (pane id `autopilot`, status-line button **Autopilot**). `/crew` still works as an alias for this release.
 - Two tabs. **Now**: mode and the Auto/Pause buttons, Needs you, an Activity feed and one footer line (`ctx 41% · limit 20% · cache 51:40 left`). **Settings**: Effort (cycle, floor, ceiling, reset), New chats, Subagents and Repo orders, each saving to your orders file as you click.

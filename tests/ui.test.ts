@@ -300,6 +300,39 @@ test('the refresh fills the footer from usage; first run and /orders setup open 
   expect(ran).toBe(0) // nothing is run on the machine
 })
 
+// Orders written after the start (Claude writing the repo file, an edit) reach the pane without a prompt.
+test('a repo orders file that appears later is picked up by the refresh', async ($: any, on: any) => {
+  mock.clock(on)
+  const set = store(on)
+  let hasRepo = false
+  on('command.register', () => ({ value: { command: 'orders' } }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('env.get', () => ({ value: '/home/t' }))
+  on('fs.read', (_: unknown, e: { path: string }) =>
+    e.path.startsWith('/repo/') ? (hasRepo ? { value: 'always-ask: migrate' } : { deny: 'missing' }) : { value: DEFAULT_ORDERS },
+  )
+  on('fs.write', () => ({ value: undefined }))
+  on('store.get', () => ({ value: undefined }))
+  on('agent.list', () => ({ value: [] }))
+  on('ui.panes', () => ({ value: [] }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await settle()
+  await set('tab', 'settings')
+  const before = await $.ui.mount(PANE('terminal'))
+  expect(await before.find({ type: 'Button', key: 'init' })).toBeTruthy()
+  await before.unmount()
+
+  hasRepo = true
+  await $.command.run({ command: 'autopilot', args: '' }) // runs the refresh
+  await settle()
+  const after = await $.ui.mount(PANE('terminal'))
+  expect((await after.find({ type: 'Text', text: /^found$/ }))?.text).toBe('found')
+  expect(await after.find({ type: 'Button', key: 'init' })).toBeFalsy()
+  expect((await after.find({ type: 'Text', text: /always-ask words/ }))?.text).toContain('18 always-ask words')
+  await after.unmount()
+})
+
 test('log lines: decisions read with a colon, picks read as a sentence', () => {
   expect(logLine({ at: 0, kind: 'asked', text: 'Deploy?' }, 120_000)).toBe('?  2m  asked you: Deploy?')
   expect(logLine({ at: 0, kind: 'effort', text: pickText('high', 'multi-file feature') }, 5_000)).toBe('◆  5s  effort high · multi-file feature')
