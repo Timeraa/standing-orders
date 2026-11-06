@@ -1,0 +1,15 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+permissions: { contents: read }
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Manifests are valid JSON
+        run: for f in .claude-plugin/*.json hooks/hooks.json; do jq empty "$f"; done
+      - name: Version is semver
+        run: jq -er '.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")' .claude-plugin/plugin.json
+      # ponytail: tests and `claude plugin validate` need the Claude Code CLI; run them locally before a PR.

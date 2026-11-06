@@ -1,0 +1,15 @@
+name: Bug report
+description: Something answered, drafted or asked wrongly, or the pane misbehaves
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: What happened, description: "Include Claude's last message (redact anything private) and the matching line from /crew." }
+    validations: { required: true }
+  - type: textarea
+    id: orders
+    attributes: { label: Relevant orders and settings }
+  - type: input
+    id: versions
+    attributes: { label: Claude Code and standing-orders versions }
+    validations: { required: true }

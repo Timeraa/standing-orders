@@ -1,5 +1,7 @@
 # Standing orders
 
+[![CI](https://github.com/Timeraa/standing-orders/actions/workflows/ci.yml/badge.svg)](https://github.com/Timeraa/standing-orders/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A Claude Code mod that stops Claude from ending long jobs on questions you've already answered.
 
 You write your rules once ("run the tests yourself before asking me", "commit and push finished work", "always ask before deploying"). When Claude finishes a turn on something like *"Want me to commit?"*, a small Haiku call reads the end of its message against your rules and decides:
@@ -95,6 +97,10 @@ After edits: `claude plugin update standing-orders@standing-orders` and restart.
 - `hooks/judges.ts`: pure parts (prompts, parsers, tree ordering). Tested directly.
 - `hooks/register.tsx`: the mod itself (judge loop, commands, band, pane).
 - `tests/`: runs with `claude plugin test`.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
