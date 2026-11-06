@@ -31,6 +31,13 @@ function engine(on: any, orders: string) {
   return seen
 }
 
+const PANE = {
+  plugin: 'standing-orders',
+  surface: 'terminal',
+  component: 'Pane',
+  requestId: 'autopilot',
+  props: { title: 'Autopilot', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+} as const
 const settle = async () => {
   for (let i = 0; i < 100; i++) await new Promise(r => setTimeout(() => r(undefined), 0))
 }
@@ -52,6 +59,10 @@ test('a new chat picks its model once, from the first prompt', async ($: any, on
   await type($, 'Now something else', 'claude-haiku-5-5', 't3')
 
   expect(seen.judged).toBe(1)
+  // the pick reaches the Activity feed, once
+  const pane = await $.ui.mount(PANE)
+  expect((await pane.findAll({ type: 'Text', text: /new chat → opus · hard/ })).length).toBe(1)
+  await pane.unmount()
   // Pinned by alias, so a newer Opus is picked up with no change here.
   expect(seen.models).toEqual(['opus', 'opus', 'claude-haiku-5-5'])
 })

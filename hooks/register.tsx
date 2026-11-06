@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Check, Counts, CrewRow, EffortView, LogEntry, Run, Vitals } from '../types'
+import type { Check, Counts, EffortView, LogEntry, Run, Vitals } from '../types'
 import {
   DEFAULT_ORDERS,
   HELP,
@@ -13,7 +13,6 @@ import {
   PREAMBLE,
   STOPS,
   asked,
-  bar,
   checkAge,
   liveChecks,
   loadChecks,
@@ -28,22 +27,22 @@ import {
   subagentModels,
   clock,
   isFollowUp,
+  isPick,
   logBody,
   logHead,
-  orderTree,
   parseEffort,
   parseModel,
   setSetting,
   parseOrders,
   parseVerdict,
-  statusMark,
+  pickText,
   takesEffort,
   type Effort,
   type ModelName,
 } from './judges'
 
 const NAME = 'standing-orders'
-const PANE = 'crew'
+const PANE = 'autopilot'
 const IDLE: Run = { autoCount: 0, startedAt: 0, pending: null, last: null }
 const run = atom({ plugin: 'standing-orders', key: 'run' } as const, IDLE)
 const isPaused = atom({ plugin: 'standing-orders', key: 'isPaused' } as const, false)
@@ -66,25 +65,16 @@ const vitals = atom({ plugin: 'standing-orders', key: 'vitals' } as const, {
   ratePercent: null,
   hasRepoOrders: true,
 } as Vitals)
-// First-run wizard choices; saved to the orders file's settings.
-const wizard = atom({ plugin: 'standing-orders', key: 'wizard' } as const, {
-  effort: true,
-  model: true,
-  subagents: true,
-  min: 'low' as Effort,
-  max: 'xhigh' as Effort,
-})
+// The Autopilot pane's open tab.
+const tab = atom({ plugin: 'standing-orders', key: 'tab' } as const, 'now' as 'now' | 'settings')
 // What the mod did this session: counts only, never stored.
 const counts = atom({ plugin: 'standing-orders', key: 'counts' } as const, { effort: {}, models: {}, subagents: 0 } as Counts)
-const crew = atom({ plugin: 'standing-orders', key: 'crew' } as const, [] as CrewRow[])
 const log = atom({ plugin: 'standing-orders', key: 'log' } as const, [] as LogEntry[])
-
-type Loop = { model: string; startedAt: number; lastAt: number; lastTool: string; tools: number }
 
 // ponytail: one session per process, so module-level context is enough.
 const ctx = {
   orders: parseOrders(DEFAULT_ORDERS),
-  // The person's own file alone: what the setup pane and the Effort button start from.
+  // The person's own file alone: what the Settings tab starts from.
   mine: parseOrders(DEFAULT_ORDERS),
   globalPath: '',
   cwd: '',
@@ -92,15 +82,12 @@ const ctx = {
   chat: '',
   turnStartedAt: 0,
   composerAt: 0,
-  isTurnRunning: false,
   lastAnswerTail: '',
   // effort
   effortJob: null as Promise<{ effort: Effort; why: string } | null> | null,
   turnEffort: null as Effort | null,
   lastBase: undefined as unknown,
   lastApplied: undefined as unknown,
-  // crew
-  loops: new Map<string, Loop>(),
   isTicking: false,
   // model: chosen once, for a chat with no history
   isFirstRun: false,
@@ -121,25 +108,14 @@ async function notifyLong($: EngineInterface, ms: number, text: string) {
   }
 }
 
-const loopOf = (id: string, now: number) => {
-  let l = ctx.loops.get(id)
-  if (!l) {
-    l = { model: '', startedAt: now, lastAt: now, lastTool: '', tools: 0 }
-    ctx.loops.set(id, l)
-  }
-  return l
-}
-
-function toolLabel(e: Record<string, unknown>) {
-  const arg = e.description ?? e.command ?? e.file_path ?? e.pattern ?? e.url ?? e.prompt ?? ''
-  return `${String(e.tool)} ${String(arg).replace(/\s+/g, ' ').slice(0, 48)}`.trim()
-}
-
 // ---- actions: the commands and the buttons share these ------------------
 
+// A lost feed line must never fail a spawn, a turn or a judgement.
 const note = async ($: EngineInterface, kind: LogEntry['kind'], text: string) => {
-  const at = await $.clock.now()
-  await update($, log, l => [...l, { at, kind, text }].slice(-20))
+  try {
+    const at = await $.clock.now()
+    await update($, log, l => [...l, { at, kind, text }].slice(-30))
+  } catch {}
 }
 const setPaused = ($: EngineInterface, paused: boolean) => update($, isPaused, () => paused)
 async function setMode($: EngineInterface, m: 'draft' | 'auto') {
@@ -175,8 +151,16 @@ async function setChecks($: EngineInterface, next: (old: Check[]) => Check[]) {
   const list = await update($, checks, next)
   await $.store.set(`checks:${ctx.cwd}`, list)
 }
-const openCrew = ($: EngineInterface) => $.ui.open({ id: PANE, title: 'Crew', closeOnEscape: true })
-const closeCrew = ($: EngineInterface) => $.ui.close({ id: PANE })
+// A tab is named only to land on it; a plain open keeps the one the person left.
+const openPane = async ($: EngineInterface, t?: 'now' | 'settings') => {
+  if (t) await update($, tab, () => t)
+  return $.ui.open({ id: PANE, title: 'Autopilot', closeOnEscape: true })
+}
+const closePane = ($: EngineInterface) => $.ui.close({ id: PANE })
+// Submitted once the calling command has returned: a submit from inside it would
+// wait on the turn the command holds.
+const startInit = ($: EngineInterface) =>
+  $.clock.after(50, () => void $.prompt.submit({ text: INIT_PROMPT, asUser: true }).catch(() => {}))
 // Paused, then draft, then auto: one click walks the whole mode.
 const cycle = async ($: EngineInterface) => {
   if (await read($, isPaused)) return setMode($, 'draft')
@@ -304,8 +288,10 @@ async function pickEffort($: EngineInterface): Promise<void> {
   const saving = (await read($, effort)).isSaving
   if (picked) {
     const { effortMin, effortMax } = ctx.orders
-    ctx.turnEffort = clampEffort(picked.effort, effortMin, saving ? capEffort(effortMax, 'medium') : effortMax)
+    const level = clampEffort(picked.effort, effortMin, saving ? capEffort(effortMax, 'medium') : effortMax)
+    ctx.turnEffort = level
     await update($, effort, v => ({ ...v, why: picked.why, isJudging: false }))
+    await note($, 'effort', pickText(level, picked.why))
   } else {
     await update($, effort, v => ({ ...v, why: 'judge slow: kept', isJudging: false }))
   }
@@ -335,32 +321,11 @@ async function pickModel($: EngineInterface, base: string) {
   // An alias: the engine resolves it to the family's newest model.
   ctx.chatModel = { base, id: picked.model }
   void tally($, 'models', picked.model)
+  await note($, 'model', pickText(picked.model, picked.why))
   $.ui.toast(`Auto model: this chat runs on ${cap(picked.model)} (${picked.why}). /model changes it; /orders model off stops this.`)
 }
 
-// ---- setup wizard ---------------------------------------------------------
-
-const SETUP = 'setup'
-async function saveSetup($: EngineInterface) {
-  const w = await read($, wizard)
-  await writeSetting($, {
-    effort: w.effort ? (ctx.mine.effortFixed ?? 'auto') : 'off',
-    'effort-min': w.min,
-    'effort-max': w.max,
-    subagents: w.subagents ? 'auto' : 'off',
-    model: w.model ? 'auto' : 'off',
-  })
-  await setEffortAuto($, w.effort)
-  await $.ui.close({ id: SETUP })
-  $.ui.toast('Saved to ~/.claude/standing-orders.md. /orders setup runs this again.')
-}
-const openSetup = async ($: EngineInterface) => {
-  const o = ctx.mine
-  await update($, wizard, () => ({ effort: o.isEffortAuto, model: o.isModelAuto, subagents: o.isSubagentsAuto, min: o.effortMin, max: o.effortMax }))
-  return $.ui.open({ id: SETUP, title: 'Standing orders setup', closeOnEscape: true })
-}
-
-// ---- vitals and crew ----------------------------------------------------
+// ---- vitals -------------------------------------------------------------
 
 async function tick($: EngineInterface) {
   const now = await $.clock.now()
@@ -379,52 +344,16 @@ async function tick($: EngineInterface) {
   }))
   await update($, effort, v => ({ ...v, isSaving: rate !== null && rate >= 85 }))
 
-  const rows: CrewRow[] = agents
-    .map(a => {
-      const l = loopOf(a.id, now)
-      return {
-        id: a.id,
-        name: a.name ?? a.description,
-        type: a.type,
-        status: a.status,
-        model: l.model,
-        startedAt: l.startedAt,
-        lastAt: l.lastAt,
-        lastTool: l.lastTool,
-        tools: l.tools,
-        parentId: a.parentId,
-      }
-    })
-    // finished agents fade out of the list after ten minutes
-    .filter(r => ['pending', 'running', 'waiting'].includes(r.status) || now - r.lastAt < 600_000)
-    .slice(-30)
   const open = await read($, checks)
   if (liveChecks(open, now).length !== open.length) await setChecks($, old => liveChecks(old, now))
-  // Forget what the engine no longer lists, and a finished agent's effort.
+  // A finished subagent's effort is no longer needed.
   const listed = new Map(agents.map(a => [a.id, a.status]))
-  for (const id of ctx.loops.keys()) if (id !== 'main' && !listed.has(id)) ctx.loops.delete(id)
   for (const id of ctx.agentEffort.keys()) {
     const st = listed.get(id)
     if (st && !['pending', 'running', 'waiting'].includes(st)) ctx.agentEffort.delete(id)
   }
-  const main = loopOf('main', now)
-  await update($, crew, () => [
-    {
-      id: 'main',
-      name: 'main conversation',
-      type: 'main',
-      status: ctx.isTurnRunning ? 'running' : 'idle',
-      model: main.model,
-      startedAt: ctx.turnStartedAt || main.startedAt,
-      lastAt: main.lastAt,
-      lastTool: main.lastTool,
-      tools: main.tools,
-    },
-    ...rows,
-  ])
 }
 
-const ago = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`)
 const shortModel = (m: string) => /(haiku|sonnet|opus|fable)/i.exec(m)?.[1]?.toLowerCase() ?? (m || '?')
 // The next value in a cycle; a value outside it starts over.
 const cycleOf = <T,>(cur: T, list: readonly T[]) => list[(list.indexOf(cur) + 1) % list.length] as T
@@ -436,12 +365,13 @@ const EFFORT_COLOR: Record<string, string> = { low: 'green', medium: 'cyan', hig
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const r = await next(e)
-    // Commands first: whatever fails below, /orders and /crew still exist.
+    // Commands first: whatever fails below, /orders and /autopilot still exist.
     await $.command.register({
       name: 'orders',
-      description: 'Standing orders: status, help, setup, init, auto, draft, on, off, effort <level>|model auto|off. Controls live in /crew',
+      description: 'Standing orders: status, help, setup, init, auto, draft, on, off, effort <level>|model auto|off. Controls live in /autopilot',
     })
-    await $.command.register({ name: 'crew', description: 'Agents, what the orders did, things for you, and the controls' })
+    await $.command.register({ name: 'autopilot', description: 'What needs you, what the orders did and picked, and the settings' })
+    await $.command.register({ name: 'crew', description: 'Old name of /autopilot' })
     ctx.cwd = e.cwd
     ctx.globalPath = `${(await $.env.get('HOME')) ?? ''}/.claude/standing-orders.md`
     await loadOrders($)
@@ -456,7 +386,7 @@ export const register: Register = on => {
     void tick($).catch(() => {})
     if (ctx.isFirstRun) {
       ctx.isFirstRun = false
-      await openSetup($).catch(() => {})
+      await openPane($, 'settings').catch(() => {})
     }
 
     return r
@@ -507,24 +437,17 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e)) // never swallow what the person typed
 
   on('turn.start', async ($, e, next) => {
-    if (e.agentId === undefined) {
-      ctx.turnStartedAt = await $.clock.now()
-      ctx.isTurnRunning = true
-    }
+    if (e.agentId === undefined) ctx.turnStartedAt = await $.clock.now()
 
     return next(e)
   })
 
   on('turn.step', async function* ($, e, next) {
-    const now = await $.clock.now()
     if (e.agentId !== undefined) {
-      loopOf(e.agentId, now).model = e.model
       const picked = ctx.agentEffort.get(e.agentId)
       const isSteerable = picked && typeof e.effort === 'string' && takesEffort(e.model)
       return yield* next(isSteerable ? { ...e, effort: picked } : e)
     }
-    loopOf('main', now).model = e.model
-
     // The chat's pick from its first prompt: every main request goes there until the person runs /model.
     if (e.index === 0) await pickModel($, e.model)
     if (ctx.chatModel && e.model !== ctx.chatModel.base) ctx.chatModel = null
@@ -577,27 +500,20 @@ export const register: Register = on => {
     const result = await next(ev.model ? e : ({ ...e, model: pick.model } as typeof e))
     const id = (result as { agentId?: string }).agentId
     if (id) {
-      ctx.agentEffort.set(id, clampEffort(pick.effort, ctx.orders.effortMin, ctx.orders.effortMax))
+      const level = clampEffort(pick.effort, ctx.orders.effortMin, ctx.orders.effortMax)
+      ctx.agentEffort.set(id, level)
+      const model = shortModel(String((result as { model?: string }).model ?? pick.model))
       await update($, counts, c => ({ ...c, subagents: c.subagents + 1 }))
-      void tally($, 'models', shortModel(String((result as { model?: string }).model ?? pick.model)))
+      void tally($, 'models', model)
+      await note($, 'subagent', pickText(`${model}/${level}`, pick.why))
     }
     return result
   }).catch(($, e, next) => next(e)) // never block a spawn
-
-  on('tool.call', async ($, e, next) => {
-    const l = loopOf(e.agentId ?? 'main', await $.clock.now())
-    l.lastTool = toolLabel(e as unknown as Record<string, unknown>)
-    l.lastAt = await $.clock.now()
-    l.tools += 1
-
-    return next(e)
-  }).catch(($, e, next) => next(e)) // bookkeeping only: never block a tool call
 
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId !== undefined) return r
 
-    ctx.isTurnRunning = false
     ctx.lastAnswerTail = e.answer.slice(-800)
     const isAnswer = e.reason === 'answer' && !e.isAborted
     if (isAnswer && STOPS.test(e.answer.slice(-1500))) {
@@ -621,16 +537,19 @@ export const register: Register = on => {
     }
   })
 
-  on('command.run', { command: 'crew' }, async $ => {
-    if ((await $.ui.panes()).some(p => p.id === PANE)) {
-      await closeCrew($)
-      return { text: 'Crew pane closed.' }
-    }
-    await openCrew($)
-    void tick($).catch(() => {})
+  // /crew is the old name: the same toggle, for this release.
+  for (const command of ['autopilot', 'crew']) {
+    on('command.run', { command }, async $ => {
+      if ((await $.ui.panes()).some(p => p.id === PANE)) {
+        await closePane($)
+        return { text: 'Autopilot pane closed.' }
+      }
+      await openPane($)
+      void tick($).catch(() => {})
 
-    return { text: 'Crew pane opened. Esc, the Close button or /crew closes it.' }
-  })
+      return { text: 'Autopilot pane opened. Esc, the Close button or /autopilot closes it.' }
+    })
+  }
 
   on('command.run', { command: 'orders' }, async ($, e) => {
     const [arg = '', sub = '', ...rest] = e.args.trim().toLowerCase().split(/\s+/)
@@ -655,8 +574,8 @@ export const register: Register = on => {
       }
     }
     if (arg === 'setup') {
-      await openSetup($)
-      return { text: 'Setup opened.' }
+      await openPane($, 'settings')
+      return { text: 'Autopilot settings opened.' }
     }
     if (arg === 'model') {
       if (sub !== 'auto' && sub !== 'off') return { text: 'Usage: /orders model auto|off' }
@@ -682,12 +601,10 @@ export const register: Register = on => {
       return { text: arg === 'off' ? 'Standing orders paused: Claude\'s questions wait for you. /orders on to resume.' : 'Standing orders on.' }
     }
     if (arg === 'init') {
-      // Submitted once this command has returned: a submit from inside it would
-      // wait on the turn the command holds.
-      $.clock.after(50, () => void $.prompt.submit({ text: INIT_PROMPT, asUser: true }).catch(() => {}))
+      startInit($)
       return { text: `Asking Claude to write ${REPO_ORDERS} for this repo.` }
     }
-    // Kept working, no longer documented: /crew covers both.
+    // Kept working, no longer documented: /autopilot covers both.
     if (arg === 'clear') {
       await setChecks($, () => [])
       return { text: 'Checks cleared.' }
@@ -697,7 +614,7 @@ export const register: Register = on => {
       const now = await $.clock.now()
       return { text: list.length ? list.map(c => `- ${c.text} (${checkAge(now - c.at)})`).join('\n') : 'No checks waiting.' }
     }
-    if (arg !== '') return { text: 'Usage: /orders [help | setup | init | auto | draft | on | off | effort auto|off|<level>|min|max | model auto|off]. Details and controls: /crew' }
+    if (arg !== '') return { text: 'Usage: /orders [help | setup | init | auto | draft | on | off | effort auto|off|<level>|min|max | model auto|off]. Details and controls: /autopilot' }
     const s = await read($, run)
     const ev = await read($, effort)
     return {
@@ -705,21 +622,20 @@ export const register: Register = on => {
         `Standing orders: ${(await read($, isPaused)) ? 'paused' : await read($, mode)}, answered ${s.autoCount} of ${ctx.orders.maxAuto}.`,
         `Effort: ${ev.isAuto ? 'auto' : 'yours'}${ev.level ? `, now ${ev.level}` : ''}${ev.isSaving ? ' (capped: usage past 85%)' : ''}.`,
         ...(s.pending ? [`Needs you: ${s.pending}`] : []),
-        'Details and controls: /crew',
+        'Details and controls: /autopilot',
       ].join('\n'),
     }
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
-    const [s, list, paused, m, ev, v, rows] = await Promise.all([
+    const [s, list, paused, m, ev, v] = await Promise.all([
       read($, run),
       read($, checks),
       read($, isPaused),
       read($, mode),
       read($, effort),
       read($, vitals),
-      read($, crew),
     ])
     const { Box, Text, Button } = $.ui.resolve(e)
 
@@ -731,9 +647,7 @@ export const register: Register = on => {
         : ''
     const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
     const isCold = left !== null && left <= 0
-    const agents = rows.filter(r => r.id !== 'main' && (r.status === 'running' || r.status === 'pending')).length
 
-    const open = agents + list.length
     return (
       <Box flexDirection="column">
         <Box>
@@ -757,9 +671,9 @@ export const register: Register = on => {
           {!v.hasRepoOrders && <Text dimColor> · no repo orders: /orders init</Text>}
           <Text> · </Text>
           <Button
-            key="crew"
-            label={open > 0 ? `Crew (${[agents ? `${agents} agents` : '', list.length ? `${list.length} checks` : ''].filter(Boolean).join(', ')})` : 'Crew'}
-            onPress={() => openCrew($)}
+            key="autopilot"
+            label={list.length > 0 ? `Autopilot · ${list.length} to do` : 'Autopilot'}
+            onPress={() => openPane($)}
           />
         </Box>
         {s.pending && <Text color="yellow" bold>⚠ Needs you: {s.pending}</Text>}
@@ -767,125 +681,148 @@ export const register: Register = on => {
     )
   })
 
-  on('ui.render', { component: 'Pane', requestId: SETUP }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const stored = await read($, wizard)
-    // A value saved by an older version may lack the range: fall back to the defaults.
-    const w = { ...stored, min: stored.min ?? 'low', max: stored.max ?? 'xhigh' }
-    const flip = (k: 'effort' | 'model' | 'subagents') => () => update($, wizard, v => ({ ...v, [k]: !v[k] }))
-    const row = (k: 'effort' | 'model' | 'subagents', title: string, color: string, text: string) => (
-      <Box flexDirection="column">
-        <Box>
-          <Text color={w[k] ? 'green' : 'gray'} bold>{w[k] ? '● ' : '○ '}</Text>
-          <Button key={k} label={`${title}  ${w[k] ? 'ON' : 'off'}`} onPress={flip(k)} />
-        </Box>
-        <Text color={color}>    {text}</Text>
-      </Box>
-    )
-    return (
-      <Box flexDirection="column" gap={1}>
-        <Text bold color="cyan">✦ Standing orders · setup</Text>
-        <Text>Claude stops asking things your rules already answer: it drafts the reply in your prompt box and you press Enter.</Text>
-        <Text bold color="magenta">Three helpers · click to toggle</Text>
-        {row('effort', 'Auto effort', 'magenta', 'Picks low to xhigh thinking for every prompt you type.')}
-        {row('model', 'Auto model for new chats', 'blue', 'Sonnet or Opus from your first message, only while the chat is empty (cache-safe).')}
-        {row('subagents', 'Auto subagents', 'cyan', 'Picks a model (Haiku for mechanical work) and effort for each helper from its task. Anything you named wins.')}
-        {w.effort && (
-          <Box>
-            <Text>    Range  </Text>
-            <Button key="min" label={`floor ${w.min}${w.min === 'low' ? ' (default)' : ''}`} onPress={() => update($, wizard, v => ({ ...v, min: cycleOf(v.min ?? 'low', ['low', 'medium', 'high']) }))} />
-            <Text>  </Text>
-            <Button key="max" label={`ceiling ${w.max}${w.max === 'xhigh' ? ' (default)' : ''}`} onPress={() => update($, wizard, v => ({ ...v, max: cycleOf(v.max ?? 'xhigh', ['medium', 'high', 'xhigh', 'max']) }))} />
-            <Button key="reset" label="  reset" onPress={() => update($, wizard, v => ({ ...v, min: 'low', max: 'xhigh' }))} />
-          </Box>
-        )}
-        <Text dimColor>Clicking a floor or ceiling steps through its levels and wraps around. max is only used if the ceiling is max.</Text>
-        <Text color="yellow">Replies stay drafts until you run /orders auto. Always-ask words live in ~/.claude/standing-orders.md.</Text>
-        <Box>
-          <Button key="save" label="✓ Save" onPress={() => saveSetup($)} />
-          <Text>  </Text>
-          <Button key="skip" role="dismiss" label="Skip" onPress={() => $.ui.close({ id: SETUP })} />
-        </Box>
-      </Box>
-    )
-  })
-
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const [rows, v, s, list, paused, m, ev, entries, tl] = await Promise.all([
-      read($, crew), read($, vitals), read($, run), read($, checks),
-      read($, isPaused), read($, mode), read($, effort), read($, log), read($, counts),
+    const [t, v, s, list, paused, m, ev, entries, tl, isOpen] = await Promise.all([
+      read($, tab), read($, vitals), read($, run), read($, checks),
+      read($, isPaused), read($, mode), read($, effort), read($, log), read($, counts), read($, isChecksOpen),
     ])
+    // The pane body scrolls, so nothing here is squeezed to a height.
     const width = Math.max(30, e.props.bodyColumns ?? 60)
-    const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
-    const isLive = (st: string) => st === 'running' || st === 'pending' || st === 'waiting'
-    const tree = orderTree(rows)
-    const isDone = (t: (typeof tree)[number]) => !isLive(t.row.status) && t.row.id !== 'main' && t.row.status !== 'failed'
-    const meter = (name: string, percent: number | null) =>
-      percent === null ? null : (
-        <Text key={name} color={heat(percent)}>
-          {name} {bar(percent)} {Math.round(percent)}%
-        </Text>
-      )
-
-    const agent = ({ row: r, depth }: (typeof tree)[number]) => {
-      const bad = r.status === 'failed' || r.status === 'killed'
-      const pad = '  '.repeat(depth)
-      const title = fit(r.name, width - depth * 2 - 28)
-      return (
-        <Box key={r.id} flexDirection="column">
-          <Text color={bad ? 'red' : isLive(r.status) ? 'cyan' : undefined} dimColor={!isLive(r.status) && !bad && r.id !== 'main'}>
-            {pad}{statusMark(r.status)}  {title}
-            <Text dimColor>{r.model ? ` · ${shortModel(r.model)}` : ''}{isLive(r.status) ? ` · ${clock(v.now - r.startedAt)}` : ''}{r.tools > 0 ? ` · ${r.tools} tools` : ''}</Text>
-          </Text>
-          {r.lastTool !== '' && isLive(r.status) && (
-            <Text dimColor>{pad}   └ {fit(r.lastTool, width - depth * 2 - 6)}</Text>
-          )}
-        </Box>
-      )
-    }
-
-    // Lines left after the header, meters and buttons; sections fill them in order.
-    let room = Math.max(1, (e.viewport?.rows ?? 24) - 13)
-    const take = <T,>(items: T[], perItem = 1, head = 1) => {
-      const n = Math.max(0, Math.min(items.length, Math.floor((room - head) / perItem)))
-      if (n > 0) room -= head + n * perItem
-      return items.slice(0, n)
-    }
-    const asks = take(s.pending ? [s.pending] : [], 1, 2)
-    const newest = [...list].reverse()
-    const isOpen = await read($, isChecksOpen)
-    // The newest five, fewer on a short pane (a quarter of the free lines) so the agents and log below stay in view; expanded shows what fits.
-    const shown = isOpen ? newest : newest.slice(0, Math.min(SHOWN_CHECKS, Math.max(1, Math.floor((room - 2) / 4))))
-    const todo = take(shown.map(c => ({ c, i: `${c.at}:${c.text}` })), 1, asks.length ? 0 : 2)
-    const live = take(tree.filter(t => !isDone(t)), 2)
-    const recent = take([...entries].reverse().slice(0, 8))
-    const done = take(tree.filter(isDone), 1)
-    const heading = (t: string, color?: string) => <Text bold color={color}>{t}</Text>
-
-    const line = <Text dimColor>{'─'.repeat(Math.min(width, 72))}</Text>
-    const o = ctx.orders
-    const effortNow = ev.level ? ` · now ${cap(ev.level)}${ev.isAuto && ev.why && ev.why !== 'auto' ? ` (${ev.why})` : ''}` : ''
-    const control = (icon: string, name: string, color: string, value: string, buttons: any) => (
+    const heading = (text: string, color?: string) => <Text bold color={color}>{text}</Text>
+    const goTo = (to: 'now' | 'settings') => () => update($, tab, () => to)
+    const tabs = (
       <Box justifyContent="space-between">
-        <Box flexShrink={1}>
-          <Text color={color} bold>{icon} {name.padEnd(10)}</Text>
-          <Text wrap="truncate-end">{value}</Text>
+        <Box>
+          {t === 'now' ? <Text bold color="cyan">● Now</Text> : <Button key="now" label="Now" onPress={goTo('now')} />}
+          <Text>  </Text>
+          {t === 'settings' ? <Text bold color="cyan">● Settings</Text> : <Button key="settings" label="Settings" onPress={goTo('settings')} />}
         </Box>
-        <Box flexShrink={0}>{buttons}</Box>
+        <Button key="close" role="dismiss" label="✕ Close" onPress={() => closePane($)} />
       </Box>
     )
-    const onOff = (isOn: boolean, key: 'model' | 'subagents') => (
-      <Button key={key} label={isOn ? 'Turn off' : 'Turn on'} onPress={() => writeSetting($, { [key]: isOn ? 'off' : 'auto' })} />
-    )
-    const usage = (
-      <Box flexDirection="column" gap={1}>
-        {line}
+
+    if (t === 'settings') {
+      // The person's own file, so a repo's orders are never written back into it.
+      const mine = ctx.mine
+      const choice = effortChoice()
+      const effortNow = ev.level ? ` · now ${cap(ev.level)}${ev.isAuto && ev.why && ev.why !== 'auto' ? ` (${ev.why})` : ''}` : ''
+      const control = (icon: string, name: string, color: string, value: string, hint: string, buttons: any) => (
         <Box flexDirection="column">
-          {heading('Usage', 'cyan')}
-          {meter('context', v.contextPercent)}
-          {meter('limit  ', v.ratePercent)}
-          {left !== null && <Text color={left <= 0 ? 'yellow' : 'cyan'}>{left <= 0 ? 'cache cold: a reply now rewrites it' : `cache   ${clock(left)} left`}</Text>}
+          <Box justifyContent="space-between">
+            <Box flexShrink={1}>
+              <Text color={color} bold>{icon} {name.padEnd(11)}</Text>
+              <Text wrap="truncate-end">{value}</Text>
+            </Box>
+            <Box flexShrink={0}>{buttons}</Box>
+          </Box>
+          <Text dimColor>  {hint}</Text>
+        </Box>
+      )
+      const onOff = (isOn: boolean, key: 'model' | 'subagents') => (
+        <Button key={key} label={isOn ? 'Turn off' : 'Turn on'} onPress={() => writeSetting($, { [key]: isOn ? 'off' : 'auto' })} />
+      )
+      return (
+        <Box flexDirection="column" gap={1}>
+          {tabs}
+          {control('◆', 'Effort', ev.level ? EFFORT_COLOR[ev.level] ?? 'magenta' : 'magenta',
+            `${!ev.isAuto ? 'yours' : mine.effortFixed ? `${mine.effortFixed} (fixed)` : `auto ${mine.effortMin}–${mine.effortMax}`}${effortNow}`,
+            'auto picks low to xhigh thinking for every prompt you type; a level fixes it; off leaves /effort to you.',
+            <Button key="effort" label={`⟳ ${ev.isAuto ? choice : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />)}
+          {choice === 'auto' && (
+            <Box>
+              <Text>  Range  </Text>
+              <Button key="floor" label={`floor ${mine.effortMin}${mine.effortMin === 'low' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-min': cycleOf(ctx.mine.effortMin, ['low', 'medium', 'high']) })} />
+              <Text>  </Text>
+              <Button key="ceiling" label={`ceiling ${mine.effortMax}${mine.effortMax === 'xhigh' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-max': cycleOf(ctx.mine.effortMax, ['medium', 'high', 'xhigh', 'max']) })} />
+              <Text>  </Text>
+              <Button key="reset" label="reset" onPress={() => writeSetting($, { 'effort-min': 'low', 'effort-max': 'xhigh' })} />
+            </Box>
+          )}
+          {control('◇', 'New chats', 'blue', mine.isModelAuto ? `auto · ${mine.models.join(' / ')}` : 'your /model',
+            'Sonnet or Opus from your first message, only while the chat is empty (cache-safe).',
+            onOff(mine.isModelAuto, 'model'))}
+          {control('◇', 'Subagents', 'cyan', mine.isSubagentsAuto ? 'auto · model + effort per task' : 'inherit the chat',
+            'Picks a model (Haiku for mechanical work) and effort for each helper from its task. Anything you named wins.',
+            onOff(mine.isSubagentsAuto, 'subagents'))}
+          {control('◈', 'Repo orders', 'yellow', v.hasRepoOrders ? 'found' : 'none',
+            'This repo\'s own .claude/standing-orders.md: how to verify work here, what to ask first.',
+            v.hasRepoOrders ? null : (
+              <Button key="init" label="Write them" onPress={() => {
+                startInit($)
+                $.ui.toast(`Asking Claude to write ${REPO_ORDERS} for this repo.`)
+              }} />
+            ))}
+          <Text dimColor>
+            {ctx.orders.terms.length} always-ask words · every click saves · rules live in ~/.claude/standing-orders.md
+          </Text>
+        </Box>
+      )
+    }
+
+    // ---- Now ---------------------------------------------------------------
+    const newest = [...list].reverse()
+    const shown = isOpen ? newest : newest.slice(0, SHOWN_CHECKS)
+    const recent = [...entries].reverse().slice(0, 8)
+    const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
+    const meters: [string, string, string][] = []
+    if (v.contextPercent !== null) meters.push(['ctx', heat(v.contextPercent), `ctx ${Math.round(v.contextPercent)}%`])
+    if (v.ratePercent !== null) meters.push(['limit', heat(v.ratePercent), `limit ${Math.round(v.ratePercent)}%`])
+    if (left !== null) meters.push(['cache', left <= 0 ? 'yellow' : 'cyan', left <= 0 ? 'cache cold' : `cache ${clock(left)} left`])
+
+    return (
+      <Box flexDirection="column" gap={1}>
+        {tabs}
+        <Box justifyContent="space-between">
+          <Text bold color={paused ? 'yellow' : m === 'auto' ? 'green' : 'cyan'}>
+            {paused ? '⏸ Paused' : m === 'auto' ? '▶ Auto' : '✎ Draft'}
+            <Text dimColor> · answered {s.autoCount} of {ctx.orders.maxAuto}</Text>
+          </Text>
+          <Box>
+            <Button key="mode" label={m === 'auto' ? 'Draft' : 'Auto'} onPress={() => setMode($, m === 'auto' ? 'draft' : 'auto')} />
+            <Text> </Text>
+            <Button key="pause" label={paused ? '▶ Resume' : '⏸ Pause'} onPress={() => setPaused($, !paused)} />
+          </Box>
+        </Box>
+
+        {s.pending || list.length > 0 ? (
+          <Box flexDirection="column">
+            <Box justifyContent="space-between">
+              {heading(`Needs you · ${(s.pending ? 1 : 0) + list.length}`, 'yellow')}
+              {list.length > 1 && <Button key="clear" label="Clear all" onPress={() => setChecks($, () => [])} />}
+            </Box>
+            {s.pending && <Text color="yellow" bold>? {fit(s.pending, width - 2)}</Text>}
+            {shown.map(c => {
+              const id = `${c.at}:${c.text}`
+              return (
+                <Box key={`check${id}`}>
+                  <Button key={`tick${id}`} label="✓ Done" onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
+                  <Box marginLeft={1} flexShrink={1}>
+                    <Text>{c.text} <Text dimColor>· {checkAge(v.now - c.at)}</Text></Text>
+                  </Box>
+                </Box>
+              )
+            })}
+            {list.length > SHOWN_CHECKS && (
+              <Button key="older" label={isOpen ? 'Show fewer' : `+${list.length - SHOWN_CHECKS} older`} onPress={() => update($, isChecksOpen, o => !o)} />
+            )}
+          </Box>
+        ) : (
+          <Text color="green">✓ Nothing needs you</Text>
+        )}
+
+        <Box flexDirection="column">
+          {heading('Activity', 'blue')}
+          {recent.length > 0
+            ? recent.map((l, i) => (
+                <Box key={`log${i}`}>
+                  <Text dimColor>{logHead(l, v.now)} </Text>
+                  <Box flexShrink={1}>
+                    <Text dimColor={isPick(l.kind)}>{logBody(l)}</Text>
+                  </Box>
+                </Box>
+              ))
+            : <Text dimColor>Nothing yet. Decisions and picks show up here.</Text>}
           {(Object.keys(tl.effort).length > 0 || Object.keys(tl.models).length > 0 || tl.subagents > 0) && (
             <Text dimColor>
               this session ·{Object.entries(tl.effort).map(([k, n]) => ` ${k} ×${n}`).join('')}
@@ -894,83 +831,15 @@ export const register: Register = on => {
             </Text>
           )}
         </Box>
-      </Box>
-    )
 
-    return (
-      <Box flexDirection="column" gap={1}>
-        <Box justifyContent="space-between">
-          <Text bold color={paused ? 'yellow' : m === 'auto' ? 'green' : 'cyan'}>
-            {paused ? '⏸ Paused' : m === 'auto' ? '▶ Auto' : '✎ Draft'}
-            <Text dimColor> · answered {s.autoCount} of {o.maxAuto}</Text>
-          </Text>
-          <Button key="close" role="dismiss" label="✕ Close" onPress={() => closeCrew($)} />
-        </Box>
-
-        <Box flexDirection="column">
-          {heading('Autopilot', 'magenta')}
-          {control('✎', 'Replies', paused ? 'yellow' : m === 'auto' ? 'green' : 'cyan', paused ? 'paused' : m === 'auto' ? 'sent for you' : 'answers wait for your Enter', (
-            <>
-              <Button key="mode" label={m === 'auto' ? 'Draft' : 'Auto'} onPress={() => setMode($, m === 'auto' ? 'draft' : 'auto')} />
-              <Text> </Text>
-              <Button key="pause" label={paused ? '▶ Resume' : '⏸ Pause'} onPress={() => setPaused($, !paused)} />
-            </>
-          ))}
-          {control('◆', 'Effort', ev.level ? EFFORT_COLOR[ev.level] ?? 'magenta' : 'magenta',
-            `${!ev.isAuto ? 'yours' : o.effortFixed ? `${o.effortFixed} (fixed)` : `auto ${o.effortMin}–${o.effortMax}`}${effortNow}`,
-            <Button key="effort" label={`⟳ ${ev.isAuto ? effortChoice() : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />)}
-          {control('◇', 'New chats', 'blue', o.isModelAuto ? `auto · ${o.models.join(' / ')}` : 'your /model', onOff(o.isModelAuto, 'model'))}
-          {control('◇', 'Subagents', 'cyan', o.isSubagentsAuto ? 'auto · model + effort per task' : 'inherit the chat', onOff(o.isSubagentsAuto, 'subagents'))}
-        </Box>
-
-        {asks.length + todo.length > 0 ? (
-          <Box flexDirection="column">
-            <Box justifyContent="space-between">
-              {heading(`Needs you · ${asks.length + list.length}`, 'yellow')}
-              {list.length > 1 && <Button key="clear" label="Clear all" onPress={() => setChecks($, () => [])} />}
-            </Box>
-            {asks.map(q => <Text key="ask" color="yellow" bold>? {fit(q, width - 2)}</Text>)}
-            {todo.map(({ c, i }) => (
-              <Box key={`check${i}`}>
-                <Button key={`tick${i}`} label="✓ Done" onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
-                <Box marginLeft={1} flexShrink={1}>
-                  <Text>{c.text} <Text dimColor>· {checkAge(v.now - c.at)}</Text></Text>
-                </Box>
+        {meters.length > 0 && (
+          <Box>
+            {meters.map(([k, color, text], i) => (
+              <Box key={k}>
+                {i > 0 && <Text dimColor> · </Text>}
+                <Text color={color}>{text}</Text>
               </Box>
             ))}
-            {list.length > todo.length && (
-              <Button key="older" label={isOpen ? 'Show fewer' : `+${list.length - todo.length} older`} onPress={() => update($, isChecksOpen, o => !o)} />
-            )}
-          </Box>
-        ) : (
-          <Text color="green">✓ Nothing needs you.</Text>
-        )}
-
-        {usage}
-
-        <Box flexDirection="column">
-          {heading(`Agents · ${rows.length - 1}`, 'magenta')}
-          {live.length > 0 ? live.map(agent) : <Text dimColor>No agents yet.</Text>}
-        </Box>
-
-        <Box flexDirection="column">
-          {heading('What the orders did', 'blue')}
-          {recent.length > 0
-            ? recent.map((l, i) => (
-                <Box key={`log${i}`}>
-                  <Text dimColor>{logHead(l, v.now)} </Text>
-                  <Box flexShrink={1}>
-                    <Text dimColor={l.kind !== 'asked'}>{logBody(l)}</Text>
-                  </Box>
-                </Box>
-              ))
-            : <Text dimColor>Nothing yet. They step in when Claude ends on a question.</Text>}
-        </Box>
-
-        {done.length > 0 && (
-          <Box flexDirection="column">
-            {heading('Finished', 'green')}
-            {done.map(agent)}
           </Box>
         )}
       </Box>

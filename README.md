@@ -18,7 +18,7 @@ You write your rules once ("run the tests yourself before asking me", "commit an
 | **ask** | It's your call (taste, product, or an *always-ask* word like `deploy`) | Nothing is answered. "Needs you" shows above the prompt and you get a notification |
 | **stop** | The work is done | You get a notification |
 
-A clickable status line and a `/crew` pane show what it is doing. A first-run setup (`/orders setup`) turns each part on or off.
+A clickable status line and the `/autopilot` pane show what it is doing and hold the settings: every part can be turned on or off there.
 
 ## Install
 
@@ -38,7 +38,7 @@ Restart Claude Code. Tested on Claude Code 2.1.319. The mod API is early access,
 - **You always win.** Anything you type yourself is never answered over, and a turn you typed into is never judged.
 - **When unsure, it asks.** The judge prompt defaults to "ask"; a failed or unparseable judgement does nothing.
 - **Nothing runs on your machine.** The mod never executes shell commands. It reads and writes only its own files (below).
-- **It shows its work.** `/crew` lists the last decisions: answered, drafted, asked you, stopped.
+- **It shows its work.** `/autopilot` lists the last decisions (answered, drafted, asked you, finished) and every pick it made (effort, a new chat's model, a subagent's model and effort), each with its reason.
 
 ### What leaves your machine
 
@@ -52,14 +52,22 @@ No other network access. Nothing is sent anywhere else.
 
 ## Use it
 
-The line above the prompt has two buttons: the mode label (click to cycle draft → auto → paused) and **Crew**, which opens the pane. Everything else is in `/crew`, which closes with Esc, its **Close** button, or `/crew` again:
+The line above the prompt has two buttons: the mode label (click to cycle draft → auto → paused) and **Autopilot** (or **Autopilot · 3 to do** when checks wait), which opens the pane. The pane closes with Esc, its **Close** button, or `/autopilot` again, and has two tabs.
 
-- mode, answers given and effort, with meters for context and rate limit and the prompt-cache countdown;
-- buttons for Pause, Draft/Auto and Effort;
-- **Needs you**: the pending question, then things only you can check (a real device, an account, another person), each with a **Done** button and its age. It never holds what Claude could run or look up itself. Each judged turn replaces its own chat's earlier items, the judge ticks off ones the conversation shows are done, and items drop after 3 days. The pane shows the newest few with a **+N older** button;
-- **Agents** as a tree (status icon plus word, model, elapsed time, tool count, last tool);
-- **What the orders did**: the last 8 decisions;
-- **Finished** agents (fade after ten minutes; failed ones stay).
+**Now**
+
+- mode, answers given, and buttons for Draft/Auto and Pause;
+- **Needs you**: the pending question, then things only you can check (a real device, an account, another person), each with a **Done** button and its age. It never holds what Claude could run or look up itself. Each judged turn replaces its own chat's earlier items, the judge ticks off ones the conversation shows are done, and items drop after 3 days. The pane shows the newest five with a **+N older** button;
+- **Activity**: the last 8 things the mod did, newest first. Decisions (`✓` sent, `✎` drafted, `?` asked you, `■` finished) and dimmed picks with their reason, for example `◆ effort high · multi-file feature`, `◇ new chat → opus · hard debugging`, `◇ subagent → haiku/low · grep the repo`. A line below counts this session's picks;
+- one footer line: context, limit and prompt-cache time left, coloured by how full they are.
+
+**Settings** (every click saves to your orders file)
+
+- **Effort**: a button cycles auto, each level and off; with auto, buttons step the floor and ceiling or reset them;
+- **New chats** and **Subagents**: turn auto model and auto subagents on or off;
+- **Repo orders**: whether this repo has its own file, with a button to have Claude write it.
+
+The pane body scrolls, so a long Needs you list never pushes the rest off.
 
 Commands, few on purpose:
 
@@ -72,8 +80,8 @@ Commands, few on purpose:
 /orders effort auto|off|low|medium|high|xhigh|max   auto, off, or a fixed level
 /orders effort min|max <level>                       bound what auto may pick
 /orders model auto|off   pick the model for a brand-new chat
-/orders setup        the first-run wizard again
-/crew                details and controls
+/orders setup        open the Settings tab
+/autopilot           the pane (/crew is its old name for now)
 ```
 
 ## Your orders
@@ -104,11 +112,11 @@ A repo's file can come from any clone, so it may only tighten things: its `alway
 - **a level**: every prompt runs at it, with no judge call and no Haiku cost.
 - **off**: your own `/effort` stands. Setting `/effort` yourself also turns auto off.
 
-The `/crew` Effort button cycles through all of these and writes the choice back to your orders file.
+The Effort button on the `/autopilot` Settings tab cycles through all of these and writes the choice back to your orders file.
 
 ## Auto model
 
-Off unless `model: auto` (the first-run setup offers it, pre-ticked). Only for a chat with no history: Haiku reads your first message and picks one of `models:` (default sonnet, opus), always the newest model of that family. Every request of that chat then goes to that model, so nothing is rewritten in the prompt cache mid-chat. Run `/model` yourself and it steps aside. The chat's header may still show the model you started on.
+On in the file the first run writes (`model: auto`); the Settings tab turns it off. Only for a chat with no history: Haiku reads your first message and picks one of `models:` (default sonnet, opus), always the newest model of that family. Every request of that chat then goes to that model, so nothing is rewritten in the prompt cache mid-chat. Run `/model` yourself and it steps aside. The chat's header may still show the model you started on.
 
 ## Subagents
 
@@ -125,8 +133,8 @@ claude plugin validate .
 
 After edits: `claude plugin update standing-orders@standing-orders` and restart.
 
-- `hooks/judges.ts`: pure parts (prompts, parsers, tree ordering). Tested directly.
-- `hooks/register.tsx`: the mod itself (judge loop, commands, band, pane).
+- `hooks/judges.ts`: pure parts (prompts, parsers, log lines). Tested directly.
+- `hooks/register.tsx`: the mod itself (judge loop, commands, band, the Autopilot pane).
 - `tests/`: runs with `claude plugin test`.
 
 ## Contributing

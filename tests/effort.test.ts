@@ -33,6 +33,13 @@ function engine(on: any, level: string): Seen {
   return seen
 }
 
+const PANE = {
+  plugin: 'standing-orders',
+  surface: 'terminal',
+  component: 'Pane',
+  requestId: 'autopilot',
+  props: { title: 'Autopilot', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+} as const
 const settle = async () => {
   for (let i = 0; i < 100; i++) await new Promise(r => setTimeout(() => r(undefined), 0))
 }
@@ -57,6 +64,12 @@ test('a typed prompt runs at the judged effort; a go-ahead keeps it without aski
   await prompt($, 'go ahead', 'claude-opus-5-5', 'medium', 't2')
   expect(seen.efforts).toEqual(['high', 'high'])
   expect(seen.judged).toBe(1)
+
+  // the judged pick reaches the Activity feed once; the kept go-ahead adds nothing
+  const pane = await $.ui.mount(PANE)
+  await pane.press({ key: 'now' }) // a first run opens the pane on Settings
+  expect((await pane.findAll({ type: 'Text', text: /effort high · test/ })).length).toBe(1)
+  await pane.unmount()
 })
 
 test('a model where effort rewrites the cache is left alone', async ($: any, on: any) => {

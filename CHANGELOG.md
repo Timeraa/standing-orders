@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0
+- `/crew` is now `/autopilot` (pane id `autopilot`, status-line button **Autopilot**). `/crew` still works as an alias for this release.
+- Two tabs. **Now**: mode and the Auto/Pause buttons, Needs you, an Activity feed and one footer line (`ctx 41% · limit 20% · cache 51:40 left`). **Settings**: Effort (cycle, floor, ceiling, reset), New chats, Subagents and Repo orders, each saving to your orders file as you click.
+- Activity shows what the mod picked and why, next to its decisions: the effort for a prompt, a new chat's model, a subagent's model and effort. The kept list grows from 20 to 30 entries; the pane shows 8.
+- The first-run setup pane is gone: first run opens the Settings tab, and `/orders setup` does too. Nothing is saved by a Save button any more.
+- The agent tree and Finished list are gone (Claude Code has its own tasks list); the three usage bars became the footer line; the status line no longer counts agents.
+- The pane no longer budgets lines per section: it scrolls like any pane body, and Needs you always shows its newest five.
+- The pane stops tracking tool calls, so a `tool.call` hook is no longer registered.
+
 ## 0.8.0
 - Needs you no longer piles up. The judge now lists only what a person must do outside the chat (devices, accounts, other people), at most 5 per turn, never something Claude could run or look up, and never a merge, deploy or CI result.
 - It sees the open items and ticks off the ones the conversation shows are done. A judged turn that finds new items replaces its chat's earlier ones, and repeats collapse.

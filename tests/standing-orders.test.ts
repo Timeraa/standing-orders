@@ -151,7 +151,7 @@ test('/orders help explains the modes, and the status points to it', async ($: a
   expect(help.text).toContain('draft (default)')
   expect(help.text).toContain('When to use what')
   const status = await $.command.run({ command: 'orders', args: '' })
-  expect(status.text).toContain('/crew')
+  expect(status.text).toContain('/autopilot')
 })
 
 test('the judge sees the open checks, adds new ones and ticks off resolved ones', async ($: any, on: any) => {

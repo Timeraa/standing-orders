@@ -24,7 +24,7 @@ export type EffortView = {
   isSaving: boolean
 }
 
-/** What the mod did this session, for the crew pane. */
+/** What the mod did this session, for the Autopilot pane. */
 export type Counts = {
   /** Prompts run at each effort level. */
   effort: Record<string, number>
@@ -45,21 +45,6 @@ export type Vitals = {
   hasRepoOrders: boolean
 }
 
-/** One loop as the crew pane lists it; `main` is the main conversation. */
-export type CrewRow = {
-  id: string
-  name: string
-  type: string
-  status: string
-  model: string
-  startedAt: number
-  lastAt: number
-  lastTool: string
-  tools: number
-  /** The agent that spawned this one; absent when the main loop did. */
-  parentId?: string
-}
-
 /** A thing only the person can do (device, account, other people). */
 export type Check = {
   text: string
@@ -69,11 +54,12 @@ export type Check = {
   chat: string
 }
 
-/** One judge decision, for the crew pane's "what the orders did". */
+/** One line of the Autopilot pane's Activity feed. */
 export type LogEntry = {
   at: number
-  kind: 'answered' | 'drafted' | 'asked' | 'stopped'
-  /** The reply sent or drafted, the question, or the summary. */
+  /** Decisions of the judge, then the picks the mod made (effort, a new chat's model, a subagent). */
+  kind: 'answered' | 'drafted' | 'asked' | 'stopped' | 'effort' | 'model' | 'subagent'
+  /** The reply sent or drafted, the question, the summary, or a pick ("high · multi-file feature"). */
   text: string
 }
 
@@ -86,14 +72,13 @@ declare module 'claude-code' {
       mode: 'draft' | 'auto'
       /** Checks only the person can do (devices, accounts, other people). */
       checks: Check[]
-      /** True while the crew pane lists every open check, not just the newest. */
+      /** True while the Autopilot pane lists every open check, not just the newest. */
       isChecksOpen: boolean
+      /** The Autopilot pane's open tab. */
+      tab: 'now' | 'settings'
       effort: EffortView
-      /** First-run setup choices, saved to the orders file's settings. */
-      wizard: { effort: boolean; model: boolean; subagents: boolean; min: string; max: string }
       counts: Counts
       vitals: Vitals
-      crew: CrewRow[]
       log: LogEntry[]
     }
   }

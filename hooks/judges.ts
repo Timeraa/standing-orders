@@ -332,55 +332,28 @@ export function parseSubagent(text: string, models: readonly ModelName[]): { mod
 export const capEffort = (e: Effort, cap: Effort) =>
   EFFORTS.indexOf(e) > EFFORTS.indexOf(cap) ? cap : e
 
-export type TreeRow = { id: string; status: string; parentId?: string }
-
-// Main first, then each agent under its parent (or under main when the parent
-// is gone), live ones before finished ones. Depth is the indent.
-export function orderTree<T extends TreeRow>(rows: readonly T[]): { row: T; depth: number }[] {
-  const ids = new Set(rows.map(r => r.id))
-  const live = (r: T) => (['running', 'pending', 'waiting'].includes(r.status) ? 0 : 1)
-  const out: { row: T; depth: number }[] = []
-  const walk = (parent: string, depth: number) => {
-    const kids = rows
-      .filter(r => r.id !== 'main' && (r.parentId && ids.has(r.parentId) ? r.parentId : 'main') === parent)
-      .sort((a, b) => live(a) - live(b))
-    for (const row of kids) {
-      out.push({ row, depth })
-      walk(row.id, depth + 1)
-    }
-  }
-  const main = rows.find(r => r.id === 'main')
-  if (main) out.push({ row: main, depth: 0 })
-  walk('main', 1)
-  return out
-}
-
-const ICONS: Record<string, string> = {
-  running: '●', pending: '○', waiting: '◔', idle: '◌', completed: '✓', failed: '✗', killed: '✗',
-}
-export const statusMark = (status: string) => `${ICONS[status] ?? '·'} ${status}`
-
 export function agoText(ms: number) {
   const s = Math.max(0, Math.round(ms / 1000))
   return s < 60 ? `${s}s` : `${Math.round(s / 60)}m`
 }
 
-const MARK = { answered: '✓', drafted: '✎', asked: '?', stopped: '■' }
-const VERB = { answered: 'sent', drafted: 'drafted', asked: 'asked you', stopped: 'finished' }
+const MARK = { answered: '✓', drafted: '✎', asked: '?', stopped: '■', effort: '◆', model: '◇', subagent: '◇' }
+// Decisions read "sent: ..."; picks read "effort high · why".
+const VERB = {
+  answered: 'sent: ', drafted: 'drafted: ', asked: 'asked you: ', stopped: 'finished: ',
+  effort: 'effort ', model: 'new chat → ', subagent: 'subagent → ',
+}
+export const isPick = (kind: keyof typeof MARK) => kind === 'effort' || kind === 'model' || kind === 'subagent'
+export const pickText = (what: string, why: string) => (why.trim() ? `${what} · ${why.trim()}` : what)
 export const logHead = (e: { at: number; kind: keyof typeof MARK }, now: number) =>
   `${MARK[e.kind]} ${agoText(now - e.at).padStart(3)}`
 export const logBody = (e: { kind: keyof typeof MARK; text: string }) =>
-  `${VERB[e.kind]}: ${e.text.replace(/\s+/g, ' ').slice(0, 240)}`
+  `${VERB[e.kind]}${e.text.replace(/\s+/g, ' ').slice(0, 240)}`
 export const logLine = (e: { at: number; kind: keyof typeof MARK; text: string }, now: number) =>
   `${logHead(e, now)}  ${logBody(e)}`
 
 export const fit = (text: string, n: number) =>
   n > 1 && text.length > n ? `${text.slice(0, n - 1)}…` : text
-
-export const bar = (percent: number, cells = 8) => {
-  const full = Math.round((Math.min(100, Math.max(0, percent)) / 100) * cells)
-  return '━'.repeat(full) + '─'.repeat(cells - full)
-}
 
 export function clock(ms: number) {
   const m = Math.max(0, Math.floor(ms / 60000))
@@ -412,14 +385,18 @@ When to use what:
 - Walking away from a long job  /orders auto, then /orders draft when back
 - Exploring, want every question /orders off (or Pause), /orders on later
 - First time in a repo ........ /orders init (Claude writes the repo's orders)
-- What is it doing? ........... /crew (agents, what the orders did, checks)
-- Things only you can check ... /crew: click one to tick it off (the newest
+- What is it doing? ........... /autopilot, Now tab (what needs you, what the
+                                 orders did and picked, context and limits)
+- Things only you can check ... /autopilot: click one to tick it off (the newest
                                  show first, "+N older" opens the rest; each
                                  drops by itself after 3 days)
-- Buttons for all of this ..... /crew (Esc or Close shuts it); the line above
-                                 the prompt: click the mode to cycle, Crew opens it
+- Change a setting ............ /autopilot, Settings tab: every click saves to
+                                 your orders file. /orders setup opens it
+- Buttons for all of this ..... /autopilot (Esc or Close shuts it; /crew is its
+                                 old name); the line above the prompt: click the
+                                 mode to cycle, Autopilot opens the pane
 
-The line above the prompt (click the mode to cycle it; Crew opens the pane):
+The line above the prompt (click the mode to cycle it; Autopilot opens the pane):
   Orders: draft | auto | paused   the mode
   answered N                      answers given since your last typed prompt
   Low/Medium/High/Xhigh           effort for this prompt; (yours) if you set it
@@ -446,8 +423,8 @@ for it always wins.
 Files:
 - ~/.claude/standing-orders.md: your rules for every repo, plus the settings
   always-ask, max-auto, effort, effort-min, effort-max, subagents, model, models,
-  cache-ttl. /orders setup walks you through them. Claude sees edits in the
-  next chat.
+  cache-ttl. /orders setup (or /autopilot, Settings) changes them. Claude sees
+  edits in the next chat.
 - .claude/standing-orders.md: this repo's additions, from /orders init. Its
   always-ask words add to yours and it can lower max-auto, set effort: off or
   cache-ttl. Your other settings are never overridden by a repo.`

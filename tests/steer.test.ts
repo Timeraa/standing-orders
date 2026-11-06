@@ -46,6 +46,13 @@ function engine(on: any, orders: string): Seen {
 const settle = async () => {
   for (let i = 0; i < 100; i++) await new Promise(r => setTimeout(() => r(undefined), 0))
 }
+const PANE = {
+  plugin: 'standing-orders',
+  surface: 'terminal',
+  component: 'Pane',
+  requestId: 'autopilot',
+  props: { title: 'Autopilot', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+} as const
 const step = async ($: any, turnId: string, model: string, agentId?: string) => {
   const s = $.turn.step({ turnId, index: 0, model, effort: 'medium', messageCount: 1, ...(agentId ? { agentId } : {}) })
   for await (const _ of s) void _
@@ -84,12 +91,16 @@ test('a subagent gets a model and effort from its task; a named model stays', as
 
   expect(seen.spawned.map(e => e.model)).toEqual(['haiku', 'opus', undefined])
   expect(seen.judged.length).toBe(2) // the fork was not judged
+  // each steered spawn reaches the Activity feed with its why; the fork does not
+  const pane = await $.ui.mount(PANE)
+  expect((await pane.findAll({ type: 'Text', text: /subagent → haiku\/low · search/ })).length).toBe(2)
+  await pane.unmount()
   // every request of the steered subagent runs at its picked effort
   await step($, 't9', 'claude-opus-5-5', 'a1')
   expect(seen.efforts).toEqual(['low'])
   // once it has finished, the refresh forgets its effort
   seen.a1 = 'completed'
-  await $.command.run({ command: 'crew', args: '' })
+  await $.command.run({ command: 'autopilot', args: '' })
   await settle()
   await step($, 't10', 'claude-opus-5-5', 'a1')
   expect(seen.efforts).toEqual(['low', 'medium'])
