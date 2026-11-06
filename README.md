@@ -92,7 +92,7 @@ models: sonnet, opus
 cache-ttl: 60
 ```
 
-The repo's `always-ask` words add to yours; its other settings win.
+A repo's file can come from any clone, so it may only tighten things: its `always-ask` words add to yours, its `max-auto` can only lower yours, and it may set `effort: off` and `cache-ttl`. Every other setting is read from your own file alone.
 
 ## Effort
 

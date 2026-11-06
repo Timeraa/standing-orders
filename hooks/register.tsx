@@ -186,12 +186,13 @@ async function loadOrders($: EngineInterface) {
     ctx.isFirstRun = true
     await $.fs.write(ctx.globalPath, DEFAULT_ORDERS).catch(() => {})
   }
+  let repo = ''
   let hasRepoOrders = false
   try {
-    text += `\n\n# This repo's orders\n\n${await $.fs.read(`${ctx.cwd}/${REPO_ORDERS}`)}`
+    repo = await $.fs.read(`${ctx.cwd}/${REPO_ORDERS}`)
     hasRepoOrders = true
   } catch {}
-  ctx.orders = parseOrders(text)
+  ctx.orders = parseOrders(text, repo)
   await update($, vitals, v => ({ ...v, hasRepoOrders, cacheTtlMin: ctx.orders.cacheTtlMin }))
   if (!ctx.orders.isEffortAuto) await update($, effort, v => ({ ...v, isAuto: false }))
 }

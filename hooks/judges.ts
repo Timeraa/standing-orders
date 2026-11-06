@@ -174,7 +174,12 @@ const level = (raw: string | undefined): Effort | null => {
   return EFFORTS.includes(e) ? e : null
 }
 
-export function parseOrders(text: string): Orders {
+// A repo's file is untrusted (any clone can ship one): it may add always-ask
+// words, lower max-auto, turn effort off and set cache-ttl. Every other
+// setting is the person's global file alone.
+export function parseOrders(global: string, repo = ''): Orders {
+  const text = repo ? `${global}\n\n# This repo's orders\n\n${repo}` : global
+  const repoEffortOff = setting(repo, 'effort')?.toLowerCase() === 'off'
   // always-ask lines add up: the repo's words join the global ones.
   const terms = [
     ...new Set(
@@ -192,15 +197,15 @@ export function parseOrders(text: string): Orders {
     text,
     terms,
     rail: escaped.length ? new RegExp(`\\b(${escaped.join('|')})\\b`, 'i') : null,
-    maxAuto: num(setting(text, 'max-auto'), 8),
-    isEffortAuto: (setting(text, 'effort') ?? 'auto').toLowerCase() !== 'off',
-    effortFixed: level(setting(text, 'effort')),
-    effortMin: level(setting(text, 'effort-min')) ?? 'low',
-    effortMax: level(setting(text, 'effort-max')) ?? 'xhigh',
-    isSubagentsAuto: (setting(text, 'subagents') ?? 'off').toLowerCase() === 'auto',
-    isModelAuto: (setting(text, 'model') ?? 'off').toLowerCase() === 'auto',
-    models: parseModels(setting(text, 'models')),
-    cacheTtlMin: num(setting(text, 'cache-ttl'), 60),
+    maxAuto: Math.min(num(setting(global, 'max-auto'), 8), num(setting(repo, 'max-auto'), Infinity)),
+    isEffortAuto: !repoEffortOff && (setting(global, 'effort') ?? 'auto').toLowerCase() !== 'off',
+    effortFixed: repoEffortOff ? null : level(setting(global, 'effort')),
+    effortMin: level(setting(global, 'effort-min')) ?? 'low',
+    effortMax: level(setting(global, 'effort-max')) ?? 'xhigh',
+    isSubagentsAuto: (setting(global, 'subagents') ?? 'off').toLowerCase() === 'auto',
+    isModelAuto: (setting(global, 'model') ?? 'off').toLowerCase() === 'auto',
+    models: parseModels(setting(global, 'models')),
+    cacheTtlMin: num(setting(repo, 'cache-ttl') ?? setting(global, 'cache-ttl'), 60),
   }
 }
 
@@ -383,4 +388,5 @@ Files:
   cache-ttl. /orders setup walks you through them. Claude sees edits in the
   next chat.
 - .claude/standing-orders.md: this repo's additions, from /orders init. Its
-  always-ask words add to yours; its other settings win.`
+  always-ask words add to yours and it can lower max-auto, set effort: off or
+  cache-ttl. Your other settings are never overridden by a repo.`

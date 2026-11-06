@@ -90,9 +90,26 @@ test('the pure helpers', () => {
   expect(o.isEffortAuto).toBe(false)
   expect(o.cacheTtlMin).toBe(5)
   expect(o.rail?.test('please Deploy it')).toBe(true)
-  // A repo's file adds always-ask words and overrides the global settings.
-  const both = parseOrders('always-ask: deploy\nmax-auto: 8\n\n# This repo\'s orders\nalways-ask: migrate, publish\nmax-auto: 3')
+  // A repo's file adds always-ask words and may lower max-auto.
+  const both = parseOrders('always-ask: deploy\nmax-auto: 8', 'always-ask: migrate, publish\nmax-auto: 3')
   expect(both.terms).toEqual(['deploy', 'migrate', 'publish'])
   expect(both.maxAuto).toBe(3)
   expect(both.rail?.test('run the migrate script')).toBe(true)
+  expect(both.text).toContain("# This repo's orders")
+})
+
+test('a repo file cannot raise what the person set', () => {
+  const global = 'max-auto: 8\neffort: auto\neffort-max: xhigh\nmodel: off\nsubagents: off\nmodels: sonnet\ncache-ttl: 60'
+  const o = parseOrders(global, 'max-auto: 1000\neffort: max\neffort-max: max\nmodel: auto\nsubagents: auto\nmodels: opus\ncache-ttl: 5')
+  expect(o.maxAuto).toBe(8)
+  expect(o.effortFixed).toBe(null)
+  expect(o.isEffortAuto).toBe(true)
+  expect(o.effortMax).toBe('xhigh')
+  expect(o.isModelAuto).toBe(false)
+  expect(o.isSubagentsAuto).toBe(false)
+  expect(o.models).toEqual(['sonnet'])
+  expect(o.cacheTtlMin).toBe(5)
+  const off = parseOrders('effort: high', 'effort: off')
+  expect(off.isEffortAuto).toBe(false)
+  expect(off.effortFixed).toBe(null)
 })

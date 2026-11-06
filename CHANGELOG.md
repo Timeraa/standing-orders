@@ -3,6 +3,7 @@
 ## 0.7.1
 - Fix: the setup pane showed "undefined" for floor and ceiling when an older saved value lacked them. Both now say "(default)" at the defaults, and a reset button restores them.
 - Crew pane: new Autopilot panel with one row per part (replies, effort, new-chat model, subagents), each with its state and a button; Needs you moves up; usage meters get their own section; dividers between sections.
+- Security: a repo's `.claude/standing-orders.md` can no longer loosen your settings. It may add always-ask words, lower `max-auto`, and set `effort: off` and `cache-ttl`; `max-auto` above yours, effort levels and range, `model`, `models` and `subagents` come only from your own file.
 - `/orders` and `/crew` are registered first at start, so a failure while loading the orders file no longer leaves the mod without commands; that failure is logged.
 - `/orders model` takes only `auto` or `off`; anything else shows the usage instead of turning auto model on.
 - Setup pane says "Three helpers".
