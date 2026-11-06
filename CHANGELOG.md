@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.1
+- Colour: heat-coloured meters and effort, coloured section headings and mode badges, a livelier setup pane.
+
 ## 0.6.0
 - Auto model for new chats: the first prompt of a chat with no history picks Sonnet or Opus (`models:` setting); the chat then stays on it. `model: auto|off`, `/orders model auto|off`.
 - First-run setup pane and `/orders setup` for auto effort and auto model.
