@@ -1,0 +1,11 @@
+{
+  "name": "standing-orders",
+  "owner": { "name": "Timeraa" },
+  "plugins": [
+    {
+      "name": "standing-orders",
+      "source": "./",
+      "description": "Answers Claude's end-of-turn questions from your written rules so it keeps working; auto effort per prompt; a clickable status line and a /crew pane"
+    }
+  ]
+}
