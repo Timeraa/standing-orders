@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0
+- Needs you no longer piles up. The judge now lists only what a person must do outside the chat (devices, accounts, other people), at most 5 per turn, never something Claude could run or look up, and never a merge, deploy or CI result.
+- It sees the open items and ticks off the ones the conversation shows are done. A judged turn that finds new items replaces its chat's earlier ones, and repeats collapse.
+- Items drop after 3 days and show their age. Your existing list is dated from the first load, so it expires three days after updating instead of being deleted.
+- The pane shows the newest few (up to 5, fewer on a short pane) with a "+N older" button that expands the rest.
+
 ## 0.7.3
 - Future models: the auto model pins a chat by alias (`opus`, `sonnet`), so it follows each family's newest model, and effort steering covers Opus and Sonnet 5.5 or newer instead of 5.5 alone.
 - A finished subagent's picked effort and a forgotten agent's row are dropped, so long sessions stop accumulating them.

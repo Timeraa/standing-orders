@@ -56,7 +56,7 @@ The line above the prompt has two buttons: the mode label (click to cycle draft 
 
 - mode, answers given and effort, with meters for context and rate limit and the prompt-cache countdown;
 - buttons for Pause, Draft/Auto and Effort;
-- **Needs you**: the pending question and things only you can check, each with a **Done** button;
+- **Needs you**: the pending question, then things only you can check (a real device, an account, another person), each with a **Done** button and its age. It never holds what Claude could run or look up itself. Each judged turn replaces its own chat's earlier items, the judge ticks off ones the conversation shows are done, and items drop after 3 days. The pane shows the newest few with a **+N older** button;
 - **Agents** as a tree (status icon plus word, model, elapsed time, tool count, last tool);
 - **What the orders did**: the last 8 decisions;
 - **Finished** agents (fade after ten minutes; failed ones stay).

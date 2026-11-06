@@ -19,7 +19,11 @@ test('the band and the crew pane draw', async ($: any, on: any) => {
         { id: 'main', name: 'main conversation', type: 'main', status: 'running', model: 'claude-opus-5-5', startedAt: 0, lastAt: 590_000, lastTool: 'Bash run tests', tools: 9 },
         { id: 'a1', name: 'lane-icons', type: 'general-purpose', status: 'running', model: 'claude-haiku-5-5', startedAt: 60_000, lastAt: 580_000, lastTool: 'Edit EntityIcon.gd', tools: 14 },
       ],
-      checks: ['Test the island on a notched Mac'],
+      // seven open: the pane shows the newest five and offers the rest
+      checks: [
+        ...Array.from({ length: 6 }, (_, i) => ({ text: `Old check ${i}`, at: 100_000 + i, chat: 'a' })),
+        { text: 'Test the island on a notched Mac', at: 590_000, chat: 'a' },
+      ],
       log: [{ at: 590_000, kind: 'drafted', text: 'Per my standing orders: yes, commit.' }],
     }
     return e.key in values ? { value: { value: values[e.key], version: 1 } } : { value: { value: undefined, version: 0 } }
@@ -53,6 +57,8 @@ test('the band and the crew pane draw', async ($: any, on: any) => {
     expect(await pane.find({ type: 'Button', label: /Pause/ })).toBeTruthy()
     expect(await pane.find({ type: 'Button', label: /Close/ })).toBeTruthy()
     expect(await pane.find({ type: 'Button', label: /Done/ })).toBeTruthy()
+    expect(await pane.find({ type: 'Button', text: /\+\d+ older/ })).toBeTruthy()
+    expect(await pane.find({ type: 'Text', text: /Old check 0/ })).toBeFalsy()
     expect(await pane.find({ type: 'Button', text: /Turn (on|off)/ })).toBeTruthy()
     expect(await pane.find({ type: 'Button', text: /⟳/ })).toBeTruthy()
     await pane.unmount()

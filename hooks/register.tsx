@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Counts, CrewRow, EffortView, LogEntry, Run, Vitals } from '../types'
+import type { Check, Counts, CrewRow, EffortView, LogEntry, Run, Vitals } from '../types'
 import {
   DEFAULT_ORDERS,
   HELP,
@@ -14,6 +14,11 @@ import {
   STOPS,
   asked,
   bar,
+  checkAge,
+  liveChecks,
+  loadChecks,
+  mergeChecks,
+  SHOWN_CHECKS,
   fit,
   EFFORTS,
   SUBAGENT_JUDGE,
@@ -44,7 +49,8 @@ const run = atom({ plugin: 'standing-orders', key: 'run' } as const, IDLE)
 const isPaused = atom({ plugin: 'standing-orders', key: 'isPaused' } as const, false)
 // ponytail: per session on purpose; every new session starts in draft mode.
 const mode = atom({ plugin: 'standing-orders', key: 'mode' } as const, 'draft' as 'draft' | 'auto')
-const checks = atom({ plugin: 'standing-orders', key: 'checks' } as const, [] as string[])
+const checks = atom({ plugin: 'standing-orders', key: 'checks' } as const, [] as Check[])
+const isChecksOpen = atom({ plugin: 'standing-orders', key: 'isChecksOpen' } as const, false)
 const effort = atom({ plugin: 'standing-orders', key: 'effort' } as const, {
   level: null,
   why: '',
@@ -82,6 +88,8 @@ const ctx = {
   mine: parseOrders(DEFAULT_ORDERS),
   globalPath: '',
   cwd: '',
+  // ponytail: a chat is one load of the mod (a /clear or reload starts a new one); its items are replaced together.
+  chat: '',
   turnStartedAt: 0,
   composerAt: 0,
   isTurnRunning: false,
@@ -163,7 +171,7 @@ async function chooseEffort($: EngineInterface, choice: string) {
   await writeSetting($, { effort: choice })
   await setEffortAuto($, choice !== 'off')
 }
-async function setChecks($: EngineInterface, next: (old: string[]) => string[]) {
+async function setChecks($: EngineInterface, next: (old: Check[]) => Check[]) {
   const list = await update($, checks, next)
   await $.store.set(`checks:${ctx.cwd}`, list)
 }
@@ -199,10 +207,13 @@ async function loadOrders($: EngineInterface) {
   if (!ctx.orders.isEffortAuto) await update($, effort, v => ({ ...v, isAuto: false }))
 }
 
-async function addChecks($: EngineInterface, found: readonly unknown[] | undefined) {
-  const fresh = (found ?? []).map(c => String(c).trim()).filter(Boolean)
-  if (!fresh.length) return
-  await setChecks($, old => [...old, ...fresh.filter(c => !old.includes(c))].slice(-30))
+async function addChecks($: EngineInterface, found: readonly unknown[] | undefined, resolved: readonly unknown[] | undefined) {
+  const strings = (l: readonly unknown[] | undefined) => (Array.isArray(l) ? l.map(c => String(c)) : [])
+  const fresh = strings(found)
+  const done = strings(resolved)
+  if (!fresh.length && !done.length) return
+  const now = await $.clock.now()
+  await setChecks($, old => mergeChecks(old, fresh, done, ctx.chat, now))
 }
 
 async function wait($: EngineInterface, decision: string) {
@@ -222,16 +233,17 @@ async function judge($: EngineInterface, answer: string, durationMs: number) {
   if (ctx.composerAt > ctx.turnStartedAt) return // the person spoke during the turn
 
   const tail = answer.slice(-2500)
+  const open = await read($, checks)
   const r = await $.model.complete({
     model: 'haiku',
     system: JUDGE,
-    prompt: `STANDING ORDERS:\n${ctx.orders.text}\n\nEND OF THE AGENT'S MESSAGE:\n${tail}`,
+    prompt: `STANDING ORDERS:\n${ctx.orders.text}\n\nOPEN CHECKS:\n${open.length ? open.map(c => `- ${c.text}`).join('\n') : '(none)'}\n\nEND OF THE AGENT'S MESSAGE:\n${tail}`,
     maxTokens: 500,
     timeoutMs: 45000,
   })
   const v = r.isAnswered ? parseVerdict(r.text) : null
   if (!v) return
-  await addChecks($, v.checks)
+  await addChecks($, v.checks, v.resolved)
   if (ctx.composerAt > judgedAt) return // the person took over meanwhile
 
   const state = await read($, run)
@@ -386,6 +398,8 @@ async function tick($: EngineInterface) {
     // finished agents fade out of the list after ten minutes
     .filter(r => ['pending', 'running', 'waiting'].includes(r.status) || now - r.lastAt < 600_000)
     .slice(-30)
+  const open = await read($, checks)
+  if (liveChecks(open, now).length !== open.length) await setChecks($, old => liveChecks(old, now))
   // Forget what the engine no longer lists, and a finished agent's effort.
   const listed = new Map(agents.map(a => [a.id, a.status]))
   for (const id of ctx.loops.keys()) if (id !== 'main' && !listed.has(id)) ctx.loops.delete(id)
@@ -431,8 +445,10 @@ export const register: Register = on => {
     ctx.cwd = e.cwd
     ctx.globalPath = `${(await $.env.get('HOME')) ?? ''}/.claude/standing-orders.md`
     await loadOrders($)
+    const startedAt = await $.clock.now()
+    ctx.chat = String(startedAt)
     const saved = await $.store.get(`checks:${ctx.cwd}`).catch(() => null)
-    await update($, checks, () => (Array.isArray(saved) ? saved.map(String) : []))
+    await update($, checks, () => loadChecks(saved, startedAt))
     if (!ctx.isTicking) {
       ctx.isTicking = true
       $.clock.every(5000, () => void tick($).catch(() => {}))
@@ -678,7 +694,8 @@ export const register: Register = on => {
     }
     if (arg === 'checks') {
       const list = await read($, checks)
-      return { text: list.length ? list.map(c => `- ${c}`).join('\n') : 'No checks waiting.' }
+      const now = await $.clock.now()
+      return { text: list.length ? list.map(c => `- ${c.text} (${checkAge(now - c.at)})`).join('\n') : 'No checks waiting.' }
     }
     if (arg !== '') return { text: 'Usage: /orders [help | setup | init | auto | draft | on | off | effort auto|off|<level>|min|max | model auto|off]. Details and controls: /crew' }
     const s = await read($, run)
@@ -836,7 +853,11 @@ export const register: Register = on => {
       return items.slice(0, n)
     }
     const asks = take(s.pending ? [s.pending] : [], 1, 2)
-    const todo = take(list.map((c, i) => ({ c, i })), 1, asks.length ? 0 : 2)
+    const newest = [...list].reverse()
+    const isOpen = await read($, isChecksOpen)
+    // The newest five, fewer on a short pane (a quarter of the free lines) so the agents and log below stay in view; expanded shows what fits.
+    const shown = isOpen ? newest : newest.slice(0, Math.min(SHOWN_CHECKS, Math.max(1, Math.floor((room - 2) / 4))))
+    const todo = take(shown.map(c => ({ c, i: `${c.at}:${c.text}` })), 1, asks.length ? 0 : 2)
     const live = take(tree.filter(t => !isDone(t)), 2)
     const recent = take([...entries].reverse().slice(0, 8))
     const done = take(tree.filter(isDone), 1)
@@ -911,12 +932,15 @@ export const register: Register = on => {
             {asks.map(q => <Text key="ask" color="yellow" bold>? {fit(q, width - 2)}</Text>)}
             {todo.map(({ c, i }) => (
               <Box key={`check${i}`}>
-                <Button key={`tick${i}`} label="✓ Done" onPress={() => setChecks($, old => old.filter(x => x !== c))} />
+                <Button key={`tick${i}`} label="✓ Done" onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
                 <Box marginLeft={1} flexShrink={1}>
-                  <Text>{c}</Text>
+                  <Text>{c.text} <Text dimColor>· {checkAge(v.now - c.at)}</Text></Text>
                 </Box>
               </Box>
             ))}
+            {list.length > todo.length && (
+              <Button key="older" label={isOpen ? 'Show fewer' : `+${list.length - todo.length} older`} onPress={() => update($, isChecksOpen, o => !o)} />
+            )}
           </Box>
         ) : (
           <Text color="green">✓ Nothing needs you.</Text>

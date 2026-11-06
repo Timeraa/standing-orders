@@ -60,6 +60,15 @@ export type CrewRow = {
   parentId?: string
 }
 
+/** A thing only the person can do (device, account, other people). */
+export type Check = {
+  text: string
+  /** When it was found (ms); it expires three days later. */
+  at: number
+  /** The chat that found it; that chat's next list replaces it. */
+  chat: string
+}
+
 /** One judge decision, for the crew pane's "what the orders did". */
 export type LogEntry = {
   at: number
@@ -76,7 +85,9 @@ declare module 'claude-code' {
       /** draft: the answer waits in the prompt box for Enter. auto: it is sent. */
       mode: 'draft' | 'auto'
       /** Checks only the person can do (devices, accounts, other people). */
-      checks: string[]
+      checks: Check[]
+      /** True while the crew pane lists every open check, not just the newest. */
+      isChecksOpen: boolean
       effort: EffortView
       /** First-run setup choices, saved to the orders file's settings. */
       wizard: { effort: boolean; model: boolean; subagents: boolean; min: string; max: string }

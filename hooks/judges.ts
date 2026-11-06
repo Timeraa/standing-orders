@@ -72,7 +72,7 @@ export const isFollowUp = (text: string) => text.trim().length <= 60 && FOLLOW_U
 export const JUDGE = `You decide whether an AI coding agent's end-of-turn question is already answered by its user's standing orders.
 You get the orders and the end of the agent's last message.
 Reply with JSON only, no prose:
-{"action":"continue"|"ask"|"stop","reply":"...","decision":"...","checks":["..."]}
+{"action":"continue"|"ask"|"stop","reply":"...","decision":"...","checks":["..."],"resolved":["..."]}
 
 - "continue": the message ends with a question, offer or list of leftovers that the
   orders already answer. "reply" is the answer to give, short and concrete, naming the
@@ -82,8 +82,13 @@ Reply with JSON only, no prose:
   "decision" is that question in one line.
 - "stop": the work is finished and nothing is left the agent could do itself.
   "decision" is a one-line summary of what was done.
-- "checks": things only the user can do or verify (real hardware, devices, accounts,
-  other people, store or console clicks) that the message leaves open. [] if none.
+- "checks": things a person must physically do or decide outside the chat that the
+  message leaves open: real devices, accounts or credentials, other people, store or
+  console clicks. Never something the agent could run, read or look up itself, and never
+  a merge, deploy, CI or test result the agent can check. One short line each, at most 5.
+  [] if none.
+- "resolved": items of OPEN CHECKS, copied exactly, that the message clearly shows are
+  done or no longer needed. [] when unsure.
 When in doubt, "ask".`
 
 export const EFFORT_JUDGE = `You pick how hard an AI coding agent should think about the user's next message.
@@ -106,6 +111,53 @@ export type Verdict = {
   reply?: string
   decision?: string
   checks?: string[]
+  resolved?: string[]
+}
+
+/** A thing only the person can do: when it was found and in which chat. */
+export type Check = { text: string; at: number; chat: string }
+export const CHECK_TTL_MS = 3 * 86_400_000
+export const MAX_CHECKS = 30
+export const MAX_NEW_CHECKS = 5
+export const SHOWN_CHECKS = 5
+
+const same = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ').replace(/[.\s]+$/, '')
+
+export const liveChecks = (list: readonly Check[], now: number) => list.filter(c => now - c.at < CHECK_TTL_MS)
+
+// What the store held: plain strings from before 0.8 are dated from now, so they
+// get the full lifetime instead of vanishing on first load.
+export function loadChecks(saved: unknown, now: number): Check[] {
+  if (!Array.isArray(saved)) return []
+  return liveChecks(
+    saved.flatMap((c: unknown): Check[] => {
+      if (typeof c === 'string') return c.trim() ? [{ text: c.trim(), at: now, chat: '' }] : []
+      const o = (c ?? {}) as Partial<Check>
+      if (typeof o.text !== 'string' || !o.text.trim()) return []
+      return [{ text: o.text.trim(), at: typeof o.at === 'number' && Number.isFinite(o.at) ? o.at : now, chat: String(o.chat ?? '') }]
+    }),
+    now,
+  )
+}
+
+// A judged turn's findings: its chat's earlier items give way to the new list
+// (when it has one), `resolved` ticks items off in any chat, repeats collapse.
+export function mergeChecks(old: readonly Check[], fresh: readonly string[], resolved: readonly string[], chat: string, now: number): Check[] {
+  const done = new Set(resolved.map(same))
+  const seen = new Set<string>()
+  const next = fresh
+    .map(t => t.trim())
+    .filter(t => t && !done.has(same(t)) && !seen.has(same(t)) && seen.add(same(t)))
+    .slice(0, MAX_NEW_CHECKS)
+  const keep = liveChecks(old, now).filter(
+    c => !done.has(same(c.text)) && !seen.has(same(c.text)) && !(next.length > 0 && c.chat === chat),
+  )
+  return [...keep, ...next.map(text => ({ text, at: now, chat }))].slice(-MAX_CHECKS)
+}
+
+export function checkAge(ms: number) {
+  const m = Math.floor(Math.max(0, ms) / 60_000)
+  return m < 1 ? 'now' : m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`
 }
 
 export type ModelName = 'haiku' | 'sonnet' | 'opus' | 'fable'
@@ -361,7 +413,9 @@ When to use what:
 - Exploring, want every question /orders off (or Pause), /orders on later
 - First time in a repo ........ /orders init (Claude writes the repo's orders)
 - What is it doing? ........... /crew (agents, what the orders did, checks)
-- Things only you can check ... /crew: click one to tick it off
+- Things only you can check ... /crew: click one to tick it off (the newest
+                                 show first, "+N older" opens the rest; each
+                                 drops by itself after 3 days)
 - Buttons for all of this ..... /crew (Esc or Close shuts it); the line above
                                  the prompt: click the mode to cycle, Crew opens it
 

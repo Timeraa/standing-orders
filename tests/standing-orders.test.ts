@@ -8,11 +8,11 @@ always-ask: deploy, merge to main
 max-auto: 2
 `
 
-type Seen = { filled: string[]; submitted: string[]; notified: string[] }
+type Seen = { filled: string[]; submitted: string[]; notified: string[]; prompts: string[]; stored: unknown[] }
 
 // Stands in for the engine; `verdict` is what Haiku answers.
-function engine(on: any, verdict: object): Seen {
-  const seen: Seen = { filled: [], submitted: [], notified: [] }
+function engine(on: any, verdict: object, saved?: unknown): Seen {
+  const seen: Seen = { filled: [], submitted: [], notified: [], prompts: [], stored: [] }
   on('command.register', () => ({ value: { command: 'orders' } }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('env.get', () => ({ value: '/home/t' }))
@@ -22,11 +22,16 @@ function engine(on: any, verdict: object): Seen {
       : { deny: 'missing' },
   )
   on('fs.write', () => ({ value: undefined }))
-  on('store.get', () => ({ value: undefined }))
-  on('store.set', () => ({ value: undefined }))
-  on('model.complete', () => ({
+  on('store.get', () => ({ value: saved }))
+  on('store.set', (_: unknown, e: { value: unknown }) => {
+    seen.stored.push(e.value)
+    return { value: undefined }
+  })
+  on('model.complete', (_: unknown, e: { prompt: string }) => {
+    seen.prompts.push(e.prompt)
+    return {
     value: { isAnswered: true, text: JSON.stringify(verdict) },
-  }))
+  }})
   on('prompt.read', () => ({ value: { text: '', cursor: 0 } }))
   on('prompt.fill', (_: unknown, e: { text: string }) => {
     seen.filled.push(e.text)
@@ -147,4 +152,21 @@ test('/orders help explains the modes, and the status points to it', async ($: a
   expect(help.text).toContain('When to use what')
   const status = await $.command.run({ command: 'orders', args: '' })
   expect(status.text).toContain('/crew')
+})
+
+test('the judge sees the open checks, adds new ones and ticks off resolved ones', async ($: any, on: any) => {
+  // a list saved by 0.7: plain strings, loaded as dated from now
+  const seen = engine(on, { action: 'stop', decision: 'Done.', checks: ['Test on a notched Mac'], resolved: ['merge PR #419'] }, ['Merge PR #419', 'Ask the designer'])
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await endTurn($, 'PR #419 is merged. Still untested on a device. Anything else?')
+
+  expect(seen.prompts[0]).toContain('OPEN CHECKS:\n- Merge PR #419\n- Ask the designer')
+  const list = await $.command.run({ command: 'orders', args: 'checks' })
+  expect(list.text).toContain('Ask the designer')
+  expect(list.text).toContain('Test on a notched Mac')
+  expect(list.text).not.toContain('Merge PR')
+  const saved = seen.stored.at(-1) as { text: string; at: number; chat: string }[]
+  expect(saved.map(c => c.text)).toEqual(['Ask the designer', 'Test on a notched Mac'])
+  expect(saved.every(c => typeof c.at === 'number')).toBe(true)
+  expect(saved.map(c => c.chat !== '')).toEqual([false, true]) // migrated: no chat; found now: this chat
 })
