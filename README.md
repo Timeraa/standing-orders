@@ -12,7 +12,7 @@ You write your rules once ("run the tests yourself before asking me", "commit an
 | **ask** | It's your call (taste, product, or an *always-ask* word like `deploy`) | Nothing is answered. "Needs you" shows above the prompt and you get a notification |
 | **stop** | The work is done | You get a notification |
 
-It also picks an effort level per prompt, and gives you a clickable status line and a `/crew` pane.
+It also picks an effort level per prompt, a model for each new chat, and gives you a clickable status line and a `/crew` pane.
 
 ## Install
 
@@ -37,7 +37,8 @@ Restart Claude Code. Needs a Claude Code version with mod (plugin) support.
 
 Only through Claude Code's own model call, to Haiku, in your existing session:
 - the last ~2,500 characters of Claude's final message, plus your orders file, for each question-like turn end;
-- your message (first ~3,000 characters) plus the tail of Claude's previous message, to pick an effort level.
+- your message (first ~3,000 characters) plus the tail of Claude's previous message, to pick an effort level;
+- your first message of a chat, to pick its model (only with auto model).
 
 No other network access. Nothing is sent anywhere else.
 
@@ -61,6 +62,8 @@ Commands, few on purpose:
 /orders auto|draft   send answers yourself, or leave them for your Enter
 /orders on|off       resume or pause
 /orders effort auto|off
+/orders model auto|off   pick the model for a brand-new chat
+/orders setup        the first-run wizard again
 /crew                details and controls
 ```
 
@@ -74,6 +77,8 @@ Settings live at the bottom of the file:
 always-ask: production, deploy, release, force push, delete, secret, payment
 max-auto: 8
 effort: auto
+model: auto
+models: sonnet, opus
 cache-ttl: 60
 ```
 
@@ -81,7 +86,11 @@ The repo's `always-ask` words add to yours; its other settings win.
 
 ## Auto effort
 
-Haiku picks `low`–`xhigh` for each prompt you type, only on Opus 5.5 and Sonnet 5.5, and never changes the model, so the prompt cache survives. A short "yes, go ahead" keeps the last level. Setting `/effort` yourself turns it off; past 85% of a usage limit it caps at medium. Turn it off for good with `effort: off`.
+Haiku picks `low`–`xhigh` for each prompt you type, only on Opus 5.5 and Sonnet 5.5, and never changes the model mid-chat, so the prompt cache survives. A short "yes, go ahead" keeps the last level. Setting `/effort` yourself turns it off; past 85% of a usage limit it caps at medium. Turn it off for good with `effort: off`.
+
+## Auto model
+
+Off unless `model: auto` (the first-run setup offers it, pre-ticked). Only for a chat with no history: Haiku reads your first message and picks one of `models:` (default sonnet, opus). Every request of that chat then goes to that model, so nothing is rewritten in the prompt cache mid-chat. Run `/model` yourself and it steps aside. The chat's header may still show the model you started on.
 
 ## Develop
 

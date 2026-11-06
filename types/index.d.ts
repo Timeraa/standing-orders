@@ -69,6 +69,8 @@ declare module 'claude-code' {
       /** Checks only the person can do (devices, accounts, other people). */
       checks: string[]
       effort: EffortView
+      /** First-run setup choices, saved to the orders file's settings. */
+      wizard: { effort: boolean; model: boolean }
       vitals: Vitals
       crew: CrewRow[]
       log: LogEntry[]

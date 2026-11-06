@@ -31,6 +31,8 @@ Claude write that repo's own .claude/standing-orders.md.
 always-ask: production, prod, deploy, release, merge into main, merge to main, merge into stable, force push, force-push, delete, drop, secret, credential, payment, App Store, TestFlight, submit for review
 max-auto: 8
 effort: auto
+model: auto
+models: sonnet, opus
 cache-ttl: 60
 `
 
@@ -103,6 +105,16 @@ export type Verdict = {
   checks?: string[]
 }
 
+export type ModelName = 'haiku' | 'sonnet' | 'opus' | 'fable'
+export const MODEL_NAMES: readonly ModelName[] = ['haiku', 'sonnet', 'opus', 'fable']
+
+export const MODEL_JUDGE = `You pick which model an AI coding agent should start a NEW chat on, from the user's first message.
+Reply with JSON only: {"model":"<one of the allowed models>","why":"at most 6 words"}
+- The cheapest allowed model for a quick question, lookup, small or mechanical edit, or routine task.
+- A middle model for ordinary features and fixes with clear scope.
+- The strongest allowed model for hard debugging, architecture, large refactors, deep research, or ambiguous open-ended work.
+When unsure, pick the stronger one.`
+
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh'
 export const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh']
 
@@ -112,6 +124,8 @@ export type Orders = {
   terms: string[]
   maxAuto: number
   isEffortAuto: boolean
+  isModelAuto: boolean
+  models: ModelName[]
   cacheTtlMin: number
 }
 
@@ -124,6 +138,27 @@ const setting = (text: string, key: string) => settings(text, key).at(-1)
 const num = (raw: string | undefined, fallback: number) => {
   const n = Number(raw)
   return raw !== undefined && Number.isFinite(n) && n > 0 ? n : fallback
+}
+
+export function parseModels(raw: string | undefined): ModelName[] {
+  const list = (raw ?? '').toLowerCase().split(/[,\s]+/).filter((m): m is ModelName => MODEL_NAMES.includes(m as ModelName))
+  return list.length ? [...new Set(list)] : ['sonnet', 'opus']
+}
+
+// Set `key: value` in a settings file: replace the last such line, or append one.
+export function setSetting(text: string, key: string, value: string) {
+  const re = new RegExp(`^${key}:.*$`, 'gim')
+  const hits = [...text.matchAll(re)]
+  const line = `${key}: ${value}`
+  const last = hits.at(-1)
+  if (!last || last.index === undefined) return `${text.replace(/\n*$/, '\n')}${line}\n`
+  return text.slice(0, last.index) + line + text.slice(last.index + last[0].length)
+}
+
+export function parseModel(text: string, allowed: readonly ModelName[]): { model: ModelName; why: string } | null {
+  const v = json(text)
+  const model = String(v?.model ?? '').toLowerCase() as ModelName
+  return allowed.includes(model) ? { model, why: String(v?.why ?? '').slice(0, 60) } : null
 }
 
 export function parseOrders(text: string): Orders {
@@ -146,6 +181,8 @@ export function parseOrders(text: string): Orders {
     rail: escaped.length ? new RegExp(`\\b(${escaped.join('|')})\\b`, 'i') : null,
     maxAuto: num(setting(text, 'max-auto'), 8),
     isEffortAuto: (setting(text, 'effort') ?? 'auto').toLowerCase() !== 'off',
+    isModelAuto: (setting(text, 'model') ?? 'off').toLowerCase() === 'auto',
+    models: parseModels(setting(text, 'models')),
     cacheTtlMin: num(setting(text, 'cache-ttl'), 60),
   }
 }
@@ -282,6 +319,11 @@ The line above the prompt (click the mode to cycle it; Crew opens the pane):
                                   before it runs out is cheaper
   no repo orders                  this repo has no orders file yet
 
+Model: with model: auto, a brand-new chat (no history yet) lets Haiku pick the
+model from your first message, among the models: line (default sonnet, opus).
+It happens once per chat, never mid-chat, so the cache is never rewritten. If you
+switch /model yourself, it stays out of the way. /orders model auto|off.
+
 Effort: Haiku picks low..xhigh for each prompt you type (Opus and Sonnet 5.5
 only; the model never changes, so the cache survives). A short go-ahead keeps
 the last level. Setting /effort yourself turns it off; /orders effort auto
@@ -289,6 +331,7 @@ turns it back on.
 
 Files:
 - ~/.claude/standing-orders.md: your rules for every repo, plus the settings
-  always-ask, max-auto, effort, cache-ttl. Claude sees edits in the next chat.
+  always-ask, max-auto, effort, model, models, cache-ttl. /orders setup
+  walks you through them. Claude sees edits in the next chat.
 - .claude/standing-orders.md: this repo's additions, from /orders init. Its
   always-ask words add to yours; its other settings win.`

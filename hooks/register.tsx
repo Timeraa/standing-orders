@@ -9,6 +9,7 @@ import {
   REPO_ORDERS,
   EFFORT_JUDGE,
   JUDGE,
+  MODEL_JUDGE,
   PREAMBLE,
   STOPS,
   asked,
@@ -21,14 +22,18 @@ import {
   logHead,
   orderTree,
   parseEffort,
+  parseModel,
+  setSetting,
   parseOrders,
   parseVerdict,
   statusMark,
   takesEffort,
   type Effort,
+  type ModelName,
 } from './judges'
 
 const NAME = 'standing-orders'
+const MODEL_IDS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' } as const
 const PANE = 'crew'
 const IDLE: Run = { autoCount: 0, startedAt: 0, pending: null, last: null }
 const run = atom({ plugin: 'standing-orders', key: 'run' } as const, IDLE)
@@ -51,6 +56,8 @@ const vitals = atom({ plugin: 'standing-orders', key: 'vitals' } as const, {
   ratePercent: null,
   hasRepoOrders: true,
 } as Vitals)
+// First-run wizard choices; saved to the orders file's settings.
+const wizard = atom({ plugin: 'standing-orders', key: 'wizard' } as const, { effort: true, model: true })
 const crew = atom({ plugin: 'standing-orders', key: 'crew' } as const, [] as CrewRow[])
 const log = atom({ plugin: 'standing-orders', key: 'log' } as const, [] as LogEntry[])
 
@@ -73,6 +80,11 @@ const ctx = {
   // crew
   loops: new Map<string, Loop>(),
   isTicking: false,
+  // model: chosen once, for a chat with no history
+  isFirstRun: false,
+  isModelChecked: false,
+  modelJob: null as Promise<{ model: ModelName; why: string } | null> | null,
+  chatModel: null as { base: string; id: string } | null,
 }
 
 // A turn this long that ends without a question still tells the person.
@@ -135,6 +147,7 @@ async function loadOrders($: EngineInterface) {
     text = await $.fs.read(ctx.globalPath)
   } catch {
     text = DEFAULT_ORDERS
+    ctx.isFirstRun = true
     await $.fs.write(ctx.globalPath, DEFAULT_ORDERS).catch(() => {})
   }
   let hasRepoOrders = false
@@ -241,6 +254,50 @@ async function pickEffort($: EngineInterface): Promise<void> {
   }
 }
 
+// ---- model: a new chat only ---------------------------------------------
+
+async function judgeModel($: EngineInterface, text: string) {
+  const { models } = ctx.orders
+  const r = await $.model.complete({
+    model: 'haiku',
+    system: MODEL_JUDGE,
+    prompt: `ALLOWED MODELS: ${models.join(', ')}\n\nTHE USER'S FIRST MESSAGE:\n${text.slice(0, 3000)}`,
+    maxTokens: 80,
+    timeoutMs: 3000,
+  })
+  return r.isAnswered ? parseModel(r.text, models) : null
+}
+
+// Waits briefly for the first prompt's pick, then pins the chat to it.
+async function pickModel($: EngineInterface, base: string) {
+  const job = ctx.modelJob
+  if (!job) return
+  ctx.modelJob = null
+  const picked = await Promise.race([job, $.clock.sleep(3000).then(() => null)]).catch(() => null)
+  if (!picked || shortModel(base) === picked.model) return
+  ctx.chatModel = { base, id: MODEL_IDS[picked.model] }
+  $.ui.toast(`Auto model: this chat runs on ${cap(picked.model)} (${picked.why}). /model changes it; /orders model off stops this.`)
+}
+
+// ---- setup wizard ---------------------------------------------------------
+
+const SETUP = 'setup'
+async function saveSetup($: EngineInterface) {
+  const w = await read($, wizard)
+  let text: string
+  try {
+    text = await $.fs.read(ctx.globalPath)
+  } catch {
+    text = DEFAULT_ORDERS
+  }
+  text = setSetting(setSetting(text, 'effort', w.effort ? 'auto' : 'off'), 'model', w.model ? 'auto' : 'off')
+  await $.fs.write(ctx.globalPath, text)
+  await loadOrders($)
+  await $.ui.close({ id: SETUP })
+  $.ui.toast('Saved to ~/.claude/standing-orders.md. /orders setup runs this again.')
+}
+const openSetup = ($: EngineInterface) => $.ui.open({ id: SETUP, title: 'Standing orders setup', closeOnEscape: true })
+
 // ---- vitals and crew ----------------------------------------------------
 
 async function tick($: EngineInterface) {
@@ -310,7 +367,7 @@ export const register: Register = on => {
     await update($, checks, () => (Array.isArray(saved) ? saved.map(String) : []))
     await $.command.register({
       name: 'orders',
-      description: 'Standing orders: status, help, init, auto, draft, on, off, effort auto|off. Controls live in /crew',
+      description: 'Standing orders: status, help, setup, init, auto, draft, on, off, effort|model auto|off. Controls live in /crew',
     })
     await $.command.register({ name: 'crew', description: 'Agents, what the orders did, things for you, and the controls' })
     if (!ctx.isTicking) {
@@ -318,11 +375,23 @@ export const register: Register = on => {
       $.clock.every(5000, () => void tick($).catch(() => {}))
     }
     void tick($).catch(() => {})
+    if (ctx.isFirstRun) {
+      ctx.isFirstRun = false
+      await openSetup($).catch(() => {})
+    }
 
     return r
   })
 
   on('prompt.submit', async ($, e, next) => {
+    if (e.origin.kind === 'composer' && e.turnId === undefined && !ctx.isModelChecked) {
+      // Only the chat's first prompt, only with no history, and never over a /model the person typed.
+      ctx.isModelChecked = true
+      const pct = (await read($, vitals)).contextPercent
+      if (ctx.orders.isModelAuto && !e.command && (pct === null || pct < 5) && !isFollowUp(e.text)) {
+        ctx.modelJob = judgeModel($, e.text)
+      }
+    }
     if (e.origin.kind === 'composer' && e.command?.name === 'effort') {
       // The person set effort themselves: they win until /orders effort auto.
       await update($, effort, v => ({ ...v, isAuto: false, why: 'yours' }))
@@ -370,6 +439,11 @@ export const register: Register = on => {
     }
     loopOf('main', now).model = e.model
 
+    // The chat's pick from its first prompt: every main request goes there until the person runs /model.
+    if (e.index === 0) await pickModel($, e.model)
+    if (ctx.chatModel && e.model !== ctx.chatModel.base) ctx.chatModel = null
+    const model = ctx.chatModel?.id ?? e.model
+
     let ev = await read($, effort)
     if (e.index === 0) {
       // The session's own level moved under us: the person changed it.
@@ -382,14 +456,14 @@ export const register: Register = on => {
         ev = await update($, effort, v => ({ ...v, isAuto: false, isJudging: false, why: 'yours' }))
         $.ui.toast('You changed effort yourself: auto effort is off. /orders effort auto turns it back on.')
       }
-      if (ev.isAuto && takesEffort(e.model)) await pickEffort($)
+      if (ev.isAuto && takesEffort(model)) await pickEffort($)
     }
 
-    const level = ev.isAuto && takesEffort(e.model) ? ctx.turnEffort : null
+    const level = ev.isAuto && takesEffort(model) ? ctx.turnEffort : null
     if (level) ctx.lastApplied = level
     await update($, effort, v => ({ ...v, level: level ?? (e.effort === undefined ? null : String(e.effort)) }))
 
-    const r = yield* next(level ? { ...e, effort: level } : e)
+    const r = yield* next({ ...e, ...(level ? { effort: level } : {}), ...(ctx.chatModel ? { model } : {}) })
     const done = await $.clock.now()
     await update($, vitals, v => ({ ...v, now: done, lastResponseAt: done }))
     return r
@@ -451,8 +525,24 @@ export const register: Register = on => {
       await setEffortAuto($, isAuto)
       return {
         text: isAuto
-          ? 'Auto effort on: Haiku picks low to xhigh for each prompt you type (Opus and Sonnet 5.5 only; the model never changes).'
+          ? 'Auto effort on: Haiku picks low to xhigh for each prompt you type (Opus and Sonnet 5.5 only; mid-chat the model never changes).'
           : 'Auto effort off: your own effort setting stands.',
+      }
+    }
+    if (arg === 'setup') {
+      await openSetup($)
+      return { text: 'Setup opened.' }
+    }
+    if (arg === 'model') {
+      const isAuto = sub !== 'off'
+      let text: string
+      try { text = await $.fs.read(ctx.globalPath) } catch { text = DEFAULT_ORDERS }
+      await $.fs.write(ctx.globalPath, setSetting(text, 'model', isAuto ? 'auto' : 'off'))
+      await loadOrders($)
+      return {
+        text: isAuto
+          ? `Auto model on: a brand-new chat picks its model (${ctx.orders.models.join(', ')}) from your first message. Never mid-chat.`
+          : 'Auto model off: /model stands.',
       }
     }
     if (arg === 'auto' || arg === 'draft') {
@@ -483,7 +573,7 @@ export const register: Register = on => {
       const list = await read($, checks)
       return { text: list.length ? list.map(c => `- ${c}`).join('\n') : 'No checks waiting.' }
     }
-    if (arg !== '') return { text: 'Usage: /orders [help | init | auto | draft | on | off | effort auto|off]. Details and controls: /crew' }
+    if (arg !== '') return { text: 'Usage: /orders [help | setup | init | auto | draft | on | off | effort auto|off | model auto|off]. Details and controls: /crew' }
     const s = await read($, run)
     const ev = await read($, effort)
     return {
@@ -549,6 +639,35 @@ export const register: Register = on => {
           />
         </Box>
         {s.pending && <Text color="yellow">Needs you: {s.pending}</Text>}
+      </Box>
+    )
+  })
+
+  on('ui.render', { component: 'Pane', requestId: SETUP }, async ($, e) => {
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const w = await read($, wizard)
+    const flip = (k: 'effort' | 'model') => () => update($, wizard, v => ({ ...v, [k]: !v[k] }))
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Text>When Claude ends a turn on a question your orders already answer, it drafts the answer in your prompt box. Two optional helpers:</Text>
+        <Box flexDirection="column">
+          <Box>
+            <Button key="effort" label={w.effort ? '☑ Auto effort' : '☐ Auto effort'} onPress={flip('effort')} />
+          </Box>
+          <Text dimColor>  Picks low to xhigh thinking effort for each prompt you type.</Text>
+        </Box>
+        <Box flexDirection="column">
+          <Box>
+            <Button key="model" label={w.model ? '☑ Auto model for new chats' : '☐ Auto model for new chats'} onPress={flip('model')} />
+          </Box>
+          <Text dimColor>  Picks Sonnet or Opus from your first message, only before the chat has history (cache-safe).</Text>
+        </Box>
+        <Text dimColor>Answers stay drafts until you run /orders auto. Edit ~/.claude/standing-orders.md for always-ask words and more.</Text>
+        <Box>
+          <Button key="save" label="Save" onPress={() => saveSetup($)} />
+          <Text>  </Text>
+          <Button key="skip" role="dismiss" label="Skip" onPress={() => $.ui.close({ id: SETUP })} />
+        </Box>
       </Box>
     )
   })
