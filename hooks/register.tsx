@@ -356,6 +356,9 @@ async function tick($: EngineInterface) {
 const ago = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`)
 const shortModel = (m: string) => /(haiku|sonnet|opus|fable)/i.exec(m)?.[1]?.toLowerCase() ?? (m || '?')
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+// Meters run green, yellow, red; effort runs cool to hot.
+const heat = (percent: number) => (percent >= 90 ? 'red' : percent >= 70 ? 'yellow' : 'green')
+const EFFORT_COLOR: Record<string, string> = { low: 'green', medium: 'cyan', high: 'magenta', xhigh: 'red' }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -615,18 +618,18 @@ export const register: Register = on => {
         <Box>
           <Button
             key="mode"
-            label={label}
+            label={`${paused ? '⏸' : m === 'auto' ? '▶' : '✎'} ${label}`}
             onPress={() => cycle($)}
           />
           {s.autoCount > 0 && <Text dimColor> · answered {s.autoCount}</Text>}
-          {effortText !== '' && <Text> · {effortText}</Text>}
+          {effortText !== '' && <Text color={ev.level ? EFFORT_COLOR[ev.level] : undefined}> · {effortText}</Text>}
           {v.contextPercent !== null && (
-            <Text color={v.contextPercent >= 80 ? 'yellow' : undefined} dimColor={v.contextPercent < 80}>
+            <Text color={heat(v.contextPercent)}>
               {' '}· ctx {Math.round(v.contextPercent)}%
             </Text>
           )}
           {left !== null && (
-            <Text color={isCold ? 'yellow' : undefined} dimColor={!isCold}>
+            <Text color={isCold ? 'yellow' : 'cyan'}>
               {' '}· {isCold ? 'cache cold' : `cache ${clock(left)}`}
             </Text>
           )}
@@ -638,7 +641,7 @@ export const register: Register = on => {
             onPress={() => openCrew($)}
           />
         </Box>
-        {s.pending && <Text color="yellow">Needs you: {s.pending}</Text>}
+        {s.pending && <Text color="yellow" bold>⚠ Needs you: {s.pending}</Text>}
       </Box>
     )
   })
@@ -647,24 +650,25 @@ export const register: Register = on => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const w = await read($, wizard)
     const flip = (k: 'effort' | 'model') => () => update($, wizard, v => ({ ...v, [k]: !v[k] }))
+    const row = (k: 'effort' | 'model', title: string, color: string, text: string) => (
+      <Box flexDirection="column">
+        <Box>
+          <Text color={w[k] ? 'green' : 'gray'} bold>{w[k] ? '● ' : '○ '}</Text>
+          <Button key={k} label={`${title}  ${w[k] ? 'ON' : 'off'}`} onPress={flip(k)} />
+        </Box>
+        <Text color={color}>    {text}</Text>
+      </Box>
+    )
     return (
       <Box flexDirection="column" gap={1}>
-        <Text>When Claude ends a turn on a question your orders already answer, it drafts the answer in your prompt box. Two optional helpers:</Text>
-        <Box flexDirection="column">
-          <Box>
-            <Button key="effort" label={w.effort ? '☑ Auto effort' : '☐ Auto effort'} onPress={flip('effort')} />
-          </Box>
-          <Text dimColor>  Picks low to xhigh thinking effort for each prompt you type.</Text>
-        </Box>
-        <Box flexDirection="column">
-          <Box>
-            <Button key="model" label={w.model ? '☑ Auto model for new chats' : '☐ Auto model for new chats'} onPress={flip('model')} />
-          </Box>
-          <Text dimColor>  Picks Sonnet or Opus from your first message, only before the chat has history (cache-safe).</Text>
-        </Box>
-        <Text dimColor>Answers stay drafts until you run /orders auto. Edit ~/.claude/standing-orders.md for always-ask words and more.</Text>
+        <Text bold color="cyan">✦ Standing orders · setup</Text>
+        <Text>Claude stops asking things your rules already answer: it drafts the reply in your prompt box and you press Enter.</Text>
+        <Text bold color="magenta">Two helpers · click to toggle</Text>
+        {row('effort', 'Auto effort', 'magenta', 'Picks low to xhigh thinking for every prompt you type.')}
+        {row('model', 'Auto model for new chats', 'blue', 'Sonnet or Opus from your first message, only while the chat is empty (cache-safe).')}
+        <Text color="yellow">Replies stay drafts until you run /orders auto. Always-ask words live in ~/.claude/standing-orders.md.</Text>
         <Box>
-          <Button key="save" label="Save" onPress={() => saveSetup($)} />
+          <Button key="save" label="✓ Save" onPress={() => saveSetup($)} />
           <Text>  </Text>
           <Button key="skip" role="dismiss" label="Skip" onPress={() => $.ui.close({ id: SETUP })} />
         </Box>
@@ -685,7 +689,7 @@ export const register: Register = on => {
     const isDone = (t: (typeof tree)[number]) => !isLive(t.row.status) && t.row.id !== 'main' && t.row.status !== 'failed'
     const meter = (name: string, percent: number | null) =>
       percent === null ? null : (
-        <Text key={name} color={percent >= 80 ? 'yellow' : undefined}>
+        <Text key={name} color={heat(percent)}>
           {name} {bar(percent)} {Math.round(percent)}%
         </Text>
       )
@@ -725,13 +729,13 @@ export const register: Register = on => {
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column">
           <Box justifyContent="space-between">
-            <Text bold color={paused ? 'yellow' : 'cyan'}>
+            <Text bold color={paused ? 'yellow' : m === 'auto' ? 'green' : 'cyan'}>
               {paused ? '⏸ Paused' : m === 'auto' ? '▶ Auto' : '✎ Draft'}
               <Text dimColor> · answered {s.autoCount} of {ctx.orders.maxAuto}</Text>
             </Text>
             <Button key="close" role="dismiss" label="✕ Close" onPress={() => closeCrew($)} />
           </Box>
-          <Text dimColor>
+          <Text color={ev.level ? EFFORT_COLOR[ev.level] : undefined} dimColor={!ev.level}>
             effort {ev.isAuto ? 'auto' : 'yours'}{ev.level ? ` · ${ev.level}` : ''}{ev.why && ev.isAuto && ev.why !== 'auto' ? ` (${ev.why})` : ''}
           </Text>
         </Box>
@@ -739,7 +743,7 @@ export const register: Register = on => {
         <Box flexDirection="column">
           {meter('context', v.contextPercent)}
           {meter('limit  ', v.ratePercent)}
-          {left !== null && <Text color={left <= 0 ? 'yellow' : undefined} dimColor={left > 0}>{left <= 0 ? 'cache cold: a reply now rewrites it' : `cache   ${clock(left)} left`}</Text>}
+          {left !== null && <Text color={left <= 0 ? 'yellow' : 'cyan'}>{left <= 0 ? 'cache cold: a reply now rewrites it' : `cache   ${clock(left)} left`}</Text>}
         </Box>
 
         <Box>
@@ -756,7 +760,7 @@ export const register: Register = on => {
               {heading(`Needs you · ${asks.length + list.length}`, 'yellow')}
               {list.length > 1 && <Button key="clear" label="Clear all" onPress={() => setChecks($, () => [])} />}
             </Box>
-            {asks.map(q => <Text key="ask" color="yellow">? {fit(q, width - 2)}</Text>)}
+            {asks.map(q => <Text key="ask" color="yellow" bold>? {fit(q, width - 2)}</Text>)}
             {todo.map(({ c, i }) => (
               <Box key={`check${i}`}>
                 <Button key={`tick${i}`} label="✓ Done" onPress={() => setChecks($, old => old.filter(x => x !== c))} />
@@ -767,16 +771,16 @@ export const register: Register = on => {
             ))}
           </Box>
         ) : (
-          <Text dimColor>✓ Nothing needs you.</Text>
+          <Text color="green">✓ Nothing needs you.</Text>
         )}
 
         <Box flexDirection="column">
-          {heading(`Agents · ${rows.length - 1}`)}
+          {heading(`Agents · ${rows.length - 1}`, 'magenta')}
           {live.length > 0 ? live.map(agent) : <Text dimColor>No agents yet.</Text>}
         </Box>
 
         <Box flexDirection="column">
-          {heading('What the orders did')}
+          {heading('What the orders did', 'blue')}
           {recent.length > 0
             ? recent.map((l, i) => (
                 <Box key={i}>
@@ -791,7 +795,7 @@ export const register: Register = on => {
 
         {done.length > 0 && (
           <Box flexDirection="column">
-            {heading('Finished')}
+            {heading('Finished', 'green')}
             {done.map(agent)}
           </Box>
         )}
