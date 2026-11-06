@@ -1,6 +1,7 @@
 {
   "name": "standing-orders",
   "version": "0.4.0",
+  "license": "MIT",
   "description": "Standing orders answer Claude's end-of-turn questions so it keeps working, with /orders init to set up any repo; auto effort per prompt without switching models; a status line (effort, context, cache countdown, agents) and a /crew pane",
   "types": "./types/index.d.ts"
 }

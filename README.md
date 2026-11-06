@@ -94,3 +94,7 @@ After edits: `claude plugin update standing-orders@standing-orders` and restart.
 - `hooks/judges.ts`: pure parts (prompts, parsers, tree ordering). Tested directly.
 - `hooks/register.tsx`: the mod itself (judge loop, commands, band, pane).
 - `tests/`: runs with `claude plugin test`.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
