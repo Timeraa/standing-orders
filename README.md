@@ -1,3 +1,5 @@
+<img src=".claude-plugin/icon.png" width="96" align="right" alt="">
+
 # Standing orders
 
 [![CI](https://github.com/Timeraa/standing-orders/actions/workflows/ci.yml/badge.svg)](https://github.com/Timeraa/standing-orders/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -98,7 +100,7 @@ A repo's file can come from any clone, so it may only tighten things: its `alway
 
 `effort:` takes `auto`, `off`, or a fixed level (`low`, `medium`, `high`, `xhigh`, `max`).
 
-- **auto**: Haiku picks a level for each prompt you type, only on Opus 5.5 and Sonnet 5.5, and never changes the model mid-chat, so the prompt cache survives. `effort-min` and `effort-max` bound what it may pick (default `low` to `xhigh`). `max` is never picked unless you set `effort-max: max`. A short "yes, go ahead" keeps the last level; past 85% of a usage limit it caps at medium.
+- **auto**: Haiku picks a level for each prompt you type, only on Opus and Sonnet 5.5 or newer, and never changes the model mid-chat, so the prompt cache survives. `effort-min` and `effort-max` bound what it may pick (default `low` to `xhigh`). `max` is never picked unless you set `effort-max: max`. A short "yes, go ahead" keeps the last level; past 85% of a usage limit it caps at medium.
 - **a level**: every prompt runs at it, with no judge call and no Haiku cost.
 - **off**: your own `/effort` stands. Setting `/effort` yourself also turns auto off.
 
@@ -106,7 +108,7 @@ The `/crew` Effort button cycles through all of these and writes the choice back
 
 ## Auto model
 
-Off unless `model: auto` (the first-run setup offers it, pre-ticked). Only for a chat with no history: Haiku reads your first message and picks one of `models:` (default sonnet, opus). Every request of that chat then goes to that model, so nothing is rewritten in the prompt cache mid-chat. Run `/model` yourself and it steps aside. The chat's header may still show the model you started on.
+Off unless `model: auto` (the first-run setup offers it, pre-ticked). Only for a chat with no history: Haiku reads your first message and picks one of `models:` (default sonnet, opus), always the newest model of that family. Every request of that chat then goes to that model, so nothing is rewritten in the prompt cache mid-chat. Run `/model` yourself and it steps aside. The chat's header may still show the model you started on.
 
 ## Subagents
 

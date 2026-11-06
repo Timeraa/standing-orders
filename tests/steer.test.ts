@@ -2,10 +2,12 @@ import { expect, test } from 'claude-code/testing'
 
 declare const setTimeout: (fn: () => void, ms: number) => unknown
 
-type Seen = { efforts: unknown[]; spawned: any[]; judged: string[] }
+type Seen = { efforts: unknown[]; spawned: any[]; judged: string[]; a1: string }
 
 function engine(on: any, orders: string): Seen {
-  const seen: Seen = { efforts: [], spawned: [], judged: [] }
+  const seen: Seen = { efforts: [], spawned: [], judged: [], a1: 'running' }
+  on('agent.list', () => ({ value: [{ id: 'a1', description: 'find foo', type: 'Explore', status: seen.a1 }] }))
+  on('ui.panes', () => ({ value: [] }))
   on('command.register', () => ({ value: { command: 'orders' } }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('env.get', () => ({ value: '/home/t' }))
@@ -85,6 +87,12 @@ test('a subagent gets a model and effort from its task; a named model stays', as
   // every request of the steered subagent runs at its picked effort
   await step($, 't9', 'claude-opus-5-5', 'a1')
   expect(seen.efforts).toEqual(['low'])
+  // once it has finished, the refresh forgets its effort
+  seen.a1 = 'completed'
+  await $.command.run({ command: 'crew', args: '' })
+  await settle()
+  await step($, 't10', 'claude-opus-5-5', 'a1')
+  expect(seen.efforts).toEqual(['low', 'medium'])
 })
 
 test('subagents: off leaves spawns alone', async ($: any, on: any) => {

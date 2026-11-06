@@ -242,7 +242,14 @@ export function asked(tail: string) {
 
 // Effort per message rewrites most of the prompt cache on other models, so the
 // mod only sets it on the models where it does not.
-export const takesEffort = (model: string) => /(opus|sonnet)-5-5/i.test(model)
+// Opus and Sonnet from 5.5 on; a bare alias is the family's newest.
+// ponytail: assumes later Opus/Sonnet keep per-message effort; a family that
+// drops it costs a cache rewrite on each effort change until it is listed here.
+export function takesEffort(model: string) {
+  if (/^(opus|sonnet)(\[1m\])?$/i.test(model)) return true
+  const m = /(opus|sonnet)-(\d+)(?:-(\d{1,2}))?(?!\d)/i.exec(model)
+  return !!m && Number(m[2]) * 100 + Number(m[3] ?? 0) >= 505
+}
 
 export const clampEffort = (e: Effort, min: Effort, max: Effort) => {
   const i = EFFORTS.indexOf(e)
@@ -373,7 +380,7 @@ It happens once per chat, never mid-chat, so the cache is never rewritten. If yo
 switch /model yourself, it stays out of the way. /orders model auto|off.
 
 Effort: "effort: auto" lets Haiku pick low..xhigh for each prompt you type
-(Opus and Sonnet 5.5 only; mid-chat the model never changes, so the cache
+(Opus and Sonnet 5.5 or newer; mid-chat the model never changes, so the cache
 survives). "effort: high" (any level, even max) fixes it with no judge.
 effort-min / effort-max bound auto. A short go-ahead keeps the last level.
 Setting /effort yourself turns it off; /orders effort auto turns it back on.

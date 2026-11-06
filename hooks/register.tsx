@@ -38,7 +38,6 @@ import {
 } from './judges'
 
 const NAME = 'standing-orders'
-const MODEL_IDS = { haiku: 'claude-haiku-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', fable: 'claude-fable-5-1' } as const
 const PANE = 'crew'
 const IDLE: Run = { autoCount: 0, startedAt: 0, pending: null, last: null }
 const run = atom({ plugin: 'standing-orders', key: 'run' } as const, IDLE)
@@ -321,7 +320,8 @@ async function pickModel($: EngineInterface, base: string) {
   ctx.modelJob = null
   const picked = await Promise.race([job, $.clock.sleep(3000).then(() => null)]).catch(() => null)
   if (!picked || shortModel(base) === picked.model) return
-  ctx.chatModel = { base, id: MODEL_IDS[picked.model] }
+  // An alias: the engine resolves it to the family's newest model.
+  ctx.chatModel = { base, id: picked.model }
   void tally($, 'models', picked.model)
   $.ui.toast(`Auto model: this chat runs on ${cap(picked.model)} (${picked.why}). /model changes it; /orders model off stops this.`)
 }
@@ -386,6 +386,13 @@ async function tick($: EngineInterface) {
     // finished agents fade out of the list after ten minutes
     .filter(r => ['pending', 'running', 'waiting'].includes(r.status) || now - r.lastAt < 600_000)
     .slice(-30)
+  // Forget what the engine no longer lists, and a finished agent's effort.
+  const listed = new Map(agents.map(a => [a.id, a.status]))
+  for (const id of ctx.loops.keys()) if (id !== 'main' && !listed.has(id)) ctx.loops.delete(id)
+  for (const id of ctx.agentEffort.keys()) {
+    const st = listed.get(id)
+    if (st && !['pending', 'running', 'waiting'].includes(st)) ctx.agentEffort.delete(id)
+  }
   const main = loopOf('main', now)
   await update($, crew, () => [
     {
@@ -625,10 +632,10 @@ export const register: Register = on => {
       return {
         text:
           choice === 'auto'
-            ? `Auto effort on: Haiku picks ${ctx.orders.effortMin} to ${ctx.orders.effortMax} for each prompt you type (Opus and Sonnet 5.5 only; mid-chat the model never changes).`
+            ? `Auto effort on: Haiku picks ${ctx.orders.effortMin} to ${ctx.orders.effortMax} for each prompt you type (Opus and Sonnet 5.5 or newer; mid-chat the model never changes).`
             : choice === 'off'
               ? 'Auto effort off: your own effort setting stands.'
-              : `Effort fixed at ${choice} (Opus and Sonnet 5.5 only), no judge.`,
+              : `Effort fixed at ${choice} (Opus and Sonnet 5.5 or newer), no judge.`,
       }
     }
     if (arg === 'setup') {

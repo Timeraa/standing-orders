@@ -52,7 +52,8 @@ test('a new chat picks its model once, from the first prompt', async ($: any, on
   await type($, 'Now something else', 'claude-haiku-5-5', 't3')
 
   expect(seen.judged).toBe(1)
-  expect(seen.models).toEqual(['claude-opus-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'])
+  // Pinned by alias, so a newer Opus is picked up with no change here.
+  expect(seen.models).toEqual(['opus', 'opus', 'claude-haiku-5-5'])
 })
 
 test('model: off leaves the model alone', async ($: any, on: any) => {

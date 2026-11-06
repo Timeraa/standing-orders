@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.3
+- Future models: the auto model pins a chat by alias (`opus`, `sonnet`), so it follows each family's newest model, and effort steering covers Opus and Sonnet 5.5 or newer instead of 5.5 alone.
+- A finished subagent's picked effort and a forgotten agent's row are dropped, so long sessions stop accumulating them.
+- Icon.
+
 ## 0.7.2
 - The setup pane and the `/crew` Effort button start from your own file, so saving them never copies a repo's `effort: off` into it.
 - A failed start logs its reason as text.
