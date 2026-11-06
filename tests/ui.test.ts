@@ -36,7 +36,7 @@ test('the band and the crew pane draw', async ($: any, on: any) => {
     expect((await band.find({ type: 'Text', text: /cache/ }))?.text).toContain('cache 51:40')
     expect((await band.find({ type: 'Text', text: /Needs you/ }))?.text).toContain('Deploy')
     expect(await band.find({ type: 'Button', label: 'Crew' })).toBeTruthy()
-    expect(await band.find({ type: 'Button', label: 'Auto' })).toBeTruthy()
+    expect(await band.find({ type: 'Button', label: /Orders/ })).toBeTruthy()
     await band.unmount()
 
     const pane = await $.ui.mount({
@@ -50,7 +50,9 @@ test('the band and the crew pane draw', async ($: any, on: any) => {
     expect((await pane.find({ type: 'Text', text: /Needs you/ }))?.text).toContain('Needs you')
     expect((await pane.find({ type: 'Text', text: /notched/ }))?.text).toContain('notched')
     expect((await pane.find({ type: 'Text', text: /drafted/ }))?.text).toContain('commit')
-    expect(await pane.find({ type: 'Button', label: 'Pause' })).toBeTruthy()
+    expect(await pane.find({ type: 'Button', label: /Pause/ })).toBeTruthy()
+    expect(await pane.find({ type: 'Button', label: /Close/ })).toBeTruthy()
+    expect(await pane.find({ type: 'Button', label: /Done/ })).toBeTruthy()
     await pane.unmount()
   }
 })
@@ -93,7 +95,7 @@ test('the refresh fills the band from usage and agents, and offers /orders init'
   })
   expect((await band.find({ type: 'Text', text: /orders init/ }))?.text).toContain('no repo orders')
   expect((await band.find({ type: 'Text', text: /ctx/ }))?.text).toContain('ctx 63%')
-  expect((await band.find({ type: 'Text', text: /agents/ }))?.text).toContain('1 agents')
+  expect((await band.find({ type: 'Button', label: /agents/ }))).toBeTruthy()
   await band.unmount()
   expect(ran).toBe(0) // nothing is run on the machine
 })

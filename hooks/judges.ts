@@ -221,9 +221,18 @@ export function agoText(ms: number) {
   return s < 60 ? `${s}s` : `${Math.round(s / 60)}m`
 }
 
-const VERB = { answered: 'answered', drafted: 'drafted', asked: 'asked you', stopped: 'stopped' }
-export function logLine(e: { at: number; kind: keyof typeof VERB; text: string }, now: number) {
-  return `${agoText(now - e.at).padStart(3)} ago  ${VERB[e.kind]}: ${e.text.replace(/\s+/g, ' ').slice(0, 70)}`
+const MARK = { answered: '✓', drafted: '✎', asked: '?', stopped: '■' }
+const VERB = { answered: 'sent', drafted: 'drafted', asked: 'asked you', stopped: 'finished' }
+export function logLine(e: { at: number; kind: keyof typeof MARK; text: string }, now: number, width = 70) {
+  return `${MARK[e.kind]} ${agoText(now - e.at).padStart(3)} ago  ${VERB[e.kind]}: ${fit(e.text.replace(/\s+/g, ' '), width)}`
+}
+
+export const fit = (text: string, n: number) =>
+  n > 1 && text.length > n ? `${text.slice(0, n - 1)}…` : text
+
+export const bar = (percent: number, cells = 8) => {
+  const full = Math.round((Math.min(100, Math.max(0, percent)) / 100) * cells)
+  return '▰'.repeat(full) + '▱'.repeat(cells - full)
 }
 
 export function clock(ms: number) {
@@ -258,9 +267,10 @@ When to use what:
 - First time in a repo ........ /orders init (Claude writes the repo's orders)
 - What is it doing? ........... /crew (agents, what the orders did, checks)
 - Things only you can check ... /crew: click one to tick it off
-- Buttons for all of this ..... the line above the prompt, and /crew
+- Buttons for all of this ..... /crew (Esc or Close shuts it); the line above
+                                 the prompt: click the mode to cycle, Crew opens it
 
-The line above the prompt (click the buttons, no commands needed):
+The line above the prompt (click the mode to cycle it; Crew opens the pane):
   Orders: draft | auto | paused   the mode
   answered N                      answers given since your last typed prompt
   Low/Medium/High/Xhigh           effort for this prompt; (yours) if you set it

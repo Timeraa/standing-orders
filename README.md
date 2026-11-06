@@ -41,9 +41,10 @@ No other network access. Nothing is sent anywhere else.
 
 ## Use it
 
-Click the buttons on the line above the prompt: **Pause/Resume**, **Auto/Draft**, **Effort: mine/auto**, **Crew**. Or open `/crew`:
+The line above the prompt has two buttons: the mode label (click to cycle draft → auto → paused) and **Crew**, which opens the pane. Everything else is in `/crew`, which closes with Esc, its **Close** button, or `/crew` again:
 
-- a strip with mode, answers given, effort, context %, rate limit % and the prompt-cache countdown;
+- mode, answers given and effort, with meters for context and rate limit and the prompt-cache countdown;
+- buttons for Pause, Draft/Auto and Effort;
 - **Needs you**: the pending question and things only you can check, each with a **Done** button;
 - **Agents** as a tree (status icon plus word, model, elapsed time, tool count, last tool);
 - **What the orders did**: the last 8 decisions;

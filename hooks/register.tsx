@@ -12,6 +12,8 @@ import {
   PREAMBLE,
   STOPS,
   asked,
+  bar,
+  fit,
   capEffort,
   clock,
   isFollowUp,
@@ -115,7 +117,14 @@ async function setChecks($: EngineInterface, next: (old: string[]) => string[]) 
   const list = await update($, checks, next)
   await $.store.set(`checks:${ctx.cwd}`, list)
 }
-const openCrew = ($: EngineInterface) => $.ui.open({ id: PANE, title: 'Crew' })
+const openCrew = ($: EngineInterface) => $.ui.open({ id: PANE, title: 'Crew', closeOnEscape: true })
+const closeCrew = ($: EngineInterface) => $.ui.close({ id: PANE })
+// Paused, then draft, then auto: one click walks the whole mode.
+const cycle = async ($: EngineInterface) => {
+  if (await read($, isPaused)) return setMode($, 'draft')
+  if ((await read($, mode)) === 'draft') return setMode($, 'auto')
+  return setPaused($, true)
+}
 
 // ---- orders -------------------------------------------------------------
 
@@ -423,10 +432,14 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'crew' }, async $ => {
+    if ((await $.ui.panes()).some(p => p.id === PANE)) {
+      await closeCrew($)
+      return { text: 'Crew pane closed.' }
+    }
     await openCrew($)
     void tick($).catch(() => {})
 
-    return { text: 'Crew pane opened.' }
+    return { text: 'Crew pane opened. Esc, the Close button or /crew closes it.' }
   })
 
   on('command.run', { command: 'orders' }, async ($, e) => {
@@ -505,10 +518,15 @@ export const register: Register = on => {
     const isCold = left !== null && left <= 0
     const agents = rows.filter(r => r.id !== 'main' && (r.status === 'running' || r.status === 'pending')).length
 
+    const open = agents + list.length
     return (
       <Box flexDirection="column">
         <Box>
-          <Text color={paused ? 'yellow' : 'cyan'}>{label}</Text>
+          <Button
+            key="mode"
+            label={label}
+            onPress={() => cycle($)}
+          />
           {s.autoCount > 0 && <Text dimColor> · answered {s.autoCount}</Text>}
           {effortText !== '' && <Text> · {effortText}</Text>}
           {v.contextPercent !== null && (
@@ -521,17 +539,13 @@ export const register: Register = on => {
               {' '}· {isCold ? 'cache cold' : `cache ${clock(left)}`}
             </Text>
           )}
-          {agents > 0 && <Text dimColor> · {agents} agents (/crew)</Text>}
           {!v.hasRepoOrders && <Text dimColor> · no repo orders: /orders init</Text>}
-          {list.length > 0 && <Text dimColor> · {list.length} checks for you</Text>}
-          <Text> </Text>
-          <Button key="pause" label={paused ? 'Resume' : 'Pause'} onPress={() => setPaused($, !paused)} />
-          <Text> </Text>
-          <Button key="mode" label={m === 'auto' ? 'Draft' : 'Auto'} onPress={() => setMode($, m === 'auto' ? 'draft' : 'auto')} />
-          <Text> </Text>
-          <Button key="effort" label={ev.isAuto ? 'Effort: mine' : 'Effort: auto'} onPress={() => setEffortAuto($, !ev.isAuto)} />
-          <Text> </Text>
-          <Button key="crew" label="Crew" onPress={() => openCrew($)} />
+          <Text> · </Text>
+          <Button
+            key="crew"
+            label={open > 0 ? `Crew (${[agents ? `${agents} agents` : '', list.length ? `${list.length} checks` : ''].filter(Boolean).join(', ')})` : 'Crew'}
+            onPress={() => openCrew($)}
+          />
         </Box>
         {s.pending && <Text color="yellow">Needs you: {s.pending}</Text>}
       </Box>
@@ -544,68 +558,111 @@ export const register: Register = on => {
       read($, crew), read($, vitals), read($, run), read($, checks),
       read($, isPaused), read($, mode), read($, effort), read($, log),
     ])
+    const width = Math.max(30, e.props.bodyColumns ?? 60)
     const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
-    const strip = [
-      paused ? 'paused' : m,
-      `answered ${s.autoCount} of ${ctx.orders.maxAuto}`,
-      `effort ${ev.isAuto ? 'auto' : 'yours'}${ev.level ? ` ${ev.level}` : ''}`,
-      v.contextPercent !== null ? `ctx ${Math.round(v.contextPercent)}%` : null,
-      v.ratePercent !== null ? `limit ${Math.round(v.ratePercent)}%` : null,
-      left !== null ? (left <= 0 ? 'cache cold' : `cache ${clock(left)}`) : null,
-    ].filter(Boolean).join(' · ')
-
-    const tree = orderTree(rows)
     const isLive = (st: string) => st === 'running' || st === 'pending' || st === 'waiting'
-    const agent = ({ row: r, depth }: (typeof tree)[number]) => (
-      <Box key={r.id} flexDirection="column">
-        <Text color={r.status === 'failed' || r.status === 'killed' ? 'red' : isLive(r.status) ? 'cyan' : undefined} dimColor={!isLive(r.status) && r.id !== 'main'}>
-          {'  '.repeat(depth)}{statusMark(r.status)} {r.name.slice(0, 36)} · {shortModel(r.model)} · {clock(v.now - r.startedAt)}{r.tools > 0 ? ` · ${r.tools} tools` : ''}
+    const tree = orderTree(rows)
+    const isDone = (t: (typeof tree)[number]) => !isLive(t.row.status) && t.row.id !== 'main' && t.row.status !== 'failed'
+    const meter = (name: string, percent: number | null) =>
+      percent === null ? null : (
+        <Text key={name} color={percent >= 80 ? 'yellow' : undefined}>
+          {name} {bar(percent)} {Math.round(percent)}%
         </Text>
-        {r.lastTool !== '' && (
-          <Text dimColor>{'  '.repeat(depth + 1)}{ago(v.now - r.lastAt)} ago: {r.lastTool}</Text>
-        )}
-      </Box>
-    )
+      )
 
-    // Lines left after the strip and buttons; sections fill them in order.
-    let room = Math.max(1, (e.viewport?.rows ?? 24) - 4)
-    const take = <T,>(items: T[], perItem = 1) => {
-      const n = Math.max(0, Math.min(items.length, Math.floor(room / perItem)))
-      room -= n * perItem
+    const agent = ({ row: r, depth }: (typeof tree)[number]) => {
+      const bad = r.status === 'failed' || r.status === 'killed'
+      const pad = '  '.repeat(depth)
+      const title = fit(r.name, width - depth * 2 - 28)
+      return (
+        <Box key={r.id} flexDirection="column">
+          <Text color={bad ? 'red' : isLive(r.status) ? 'cyan' : undefined} dimColor={!isLive(r.status) && !bad && r.id !== 'main'}>
+            {pad}{statusMark(r.status)}  {title}
+            <Text dimColor> · {shortModel(r.model)} · {clock(v.now - r.startedAt)}{r.tools > 0 ? ` · ${r.tools} tools` : ''}</Text>
+          </Text>
+          {r.lastTool !== '' && isLive(r.status) && (
+            <Text dimColor>{pad}   └ {fit(r.lastTool, width - depth * 2 - 6)}</Text>
+          )}
+        </Box>
+      )
+    }
+
+    // Lines left after the header, meters and buttons; sections fill them in order.
+    let room = Math.max(1, (e.viewport?.rows ?? 24) - 7)
+    const take = <T,>(items: T[], perItem = 1, head = 1) => {
+      const n = Math.max(0, Math.min(items.length, Math.floor((room - head) / perItem)))
+      if (n > 0) room -= head + n * perItem
       return items.slice(0, n)
     }
-    const asks = take(s.pending ? [s.pending] : [])
-    const todo = take(list.map((c, i) => ({ c, i })))
-    const isDone = (t: (typeof tree)[number]) => !isLive(t.row.status) && t.row.id !== 'main' && t.row.status !== 'failed'
+    const asks = take(s.pending ? [s.pending] : [], 1, 2)
+    const todo = take(list.map((c, i) => ({ c, i })), 1, asks.length ? 0 : 2)
     const live = take(tree.filter(t => !isDone(t)), 2)
     const recent = take([...entries].reverse().slice(0, 8))
-    const done = take(tree.filter(isDone), 2)
+    const done = take(tree.filter(isDone), 1)
+    const heading = (t: string, color?: string) => <Text bold color={color}>{t}</Text>
 
     return (
-      <Box flexDirection="column">
-        <Text>{strip}</Text>
-        <Box>
-          <Button key="pause" label={paused ? 'Resume' : 'Pause'} onPress={() => setPaused($, !paused)} />
-          <Text> </Text>
-          <Button key="mode" label={m === 'auto' ? 'Draft' : 'Auto'} onPress={() => setMode($, m === 'auto' ? 'draft' : 'auto')} />
-          <Text> </Text>
-          <Button key="effort" label={ev.isAuto ? 'Effort: mine' : 'Effort: auto'} onPress={() => setEffortAuto($, !ev.isAuto)} />
-        </Box>
-        {asks.length + todo.length > 0 && <Text color="yellow">Needs you</Text>}
-        {asks.map(q => <Text color="yellow">? {q}</Text>)}
-        {todo.map(({ c, i }) => (
-          <Box key={`check${i}`}>
-            <Text>☐ {c} </Text>
-            <Button key={`tick${i}`} label="Done" onPress={() => setChecks($, old => old.filter(x => x !== c))} />
+      <Box flexDirection="column" gap={1}>
+        <Box flexDirection="column">
+          <Box justifyContent="space-between">
+            <Text bold color={paused ? 'yellow' : 'cyan'}>
+              {paused ? '⏸ Paused' : m === 'auto' ? '▶ Auto' : '✎ Draft'}
+              <Text dimColor> · answered {s.autoCount} of {ctx.orders.maxAuto}</Text>
+            </Text>
+            <Button key="close" role="dismiss" label="✕ Close" onPress={() => closeCrew($)} />
           </Box>
-        ))}
-        {live.length > 0 && <Text bold>Agents</Text>}
-        {live.map(agent)}
-        {recent.length > 0 && <Text bold>What the orders did</Text>}
-        {recent.map(l => <Text dimColor>{logLine(l, v.now)}</Text>)}
-        {done.length > 0 && <Text bold>Finished</Text>}
-        {done.map(agent)}
-        {rows.length <= 1 && <Text dimColor>No agents yet.</Text>}
+          <Text dimColor>
+            effort {ev.isAuto ? 'auto' : 'yours'}{ev.level ? ` · ${ev.level}` : ''}{ev.why && ev.isAuto ? ` (${ev.why})` : ''}
+          </Text>
+        </Box>
+
+        <Box flexDirection="column">
+          {meter('context', v.contextPercent)}
+          {meter('limit  ', v.ratePercent)}
+          {left !== null && <Text color={left <= 0 ? 'yellow' : undefined} dimColor={left > 0}>{left <= 0 ? 'cache cold: a reply now rewrites it' : `cache   ${clock(left)} left`}</Text>}
+        </Box>
+
+        <Box>
+          <Button key="pause" label={paused ? '▶ Resume' : '⏸ Pause'} onPress={() => setPaused($, !paused)} />
+          <Text>  </Text>
+          <Button key="mode" label={m === 'auto' ? 'Switch to draft' : 'Switch to auto'} onPress={() => setMode($, m === 'auto' ? 'draft' : 'auto')} />
+          <Text>  </Text>
+          <Button key="effort" label={ev.isAuto ? 'Effort: take over' : 'Effort: auto'} onPress={() => setEffortAuto($, !ev.isAuto)} />
+        </Box>
+
+        {asks.length + todo.length > 0 ? (
+          <Box flexDirection="column">
+            {heading('Needs you', 'yellow')}
+            {asks.map(q => <Text key="ask" color="yellow">? {fit(q, width - 2)}</Text>)}
+            {todo.map(({ c, i }) => (
+              <Box key={`check${i}`}>
+                <Text>☐ {fit(c, width - 12)}  </Text>
+                <Button key={`tick${i}`} label="✓ Done" onPress={() => setChecks($, old => old.filter(x => x !== c))} />
+              </Box>
+            ))}
+          </Box>
+        ) : (
+          <Text dimColor>✓ Nothing needs you.</Text>
+        )}
+
+        <Box flexDirection="column">
+          {heading('Agents')}
+          {live.length > 0 ? live.map(agent) : <Text dimColor>No agents yet.</Text>}
+        </Box>
+
+        <Box flexDirection="column">
+          {heading('What the orders did')}
+          {recent.length > 0
+            ? recent.map((l, i) => <Text key={i} dimColor={l.kind !== 'asked'}>{logLine(l, v.now, width - 22)}</Text>)
+            : <Text dimColor>Nothing yet. They step in when Claude ends on a question.</Text>}
+        </Box>
+
+        {done.length > 0 && (
+          <Box flexDirection="column">
+            {heading('Finished')}
+            {done.map(agent)}
+          </Box>
+        )}
       </Box>
     )
   })
