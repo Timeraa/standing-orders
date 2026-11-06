@@ -1,7 +1,16 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["github>Recodive/Recodive:renovate-config", ":dependencyDashboard", "helpers:pinGitHubActionDigests"],
+  "automerge": false,
   "osvVulnerabilityAlerts": true,
-  "vulnerabilityAlerts": { "addLabels": ["security"] },
-  "packageRules": [{ "matchManagers": ["github-actions"], "groupName": "github actions" }]
+  "vulnerabilityAlerts": { "addLabels": ["security"], "automerge": true },
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions",
+      "matchUpdateTypes": ["minor", "patch", "pin", "pinDigest", "digest"],
+      "automerge": true
+    },
+    { "matchUpdateTypes": ["major"], "automerge": false, "addLabels": ["major"] }
+  ]
 }
