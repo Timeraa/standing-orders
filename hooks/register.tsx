@@ -17,7 +17,8 @@ import {
   capEffort,
   clock,
   isFollowUp,
-  logLine,
+  logBody,
+  logHead,
   orderTree,
   parseEffort,
   parseOrders,
@@ -578,7 +579,7 @@ export const register: Register = on => {
         <Box key={r.id} flexDirection="column">
           <Text color={bad ? 'red' : isLive(r.status) ? 'cyan' : undefined} dimColor={!isLive(r.status) && !bad && r.id !== 'main'}>
             {pad}{statusMark(r.status)}  {title}
-            <Text dimColor> · {shortModel(r.model)} · {clock(v.now - r.startedAt)}{r.tools > 0 ? ` · ${r.tools} tools` : ''}</Text>
+            <Text dimColor>{r.model ? ` · ${shortModel(r.model)}` : ''}{isLive(r.status) ? ` · ${clock(v.now - r.startedAt)}` : ''}{r.tools > 0 ? ` · ${r.tools} tools` : ''}</Text>
           </Text>
           {r.lastTool !== '' && isLive(r.status) && (
             <Text dimColor>{pad}   └ {fit(r.lastTool, width - depth * 2 - 6)}</Text>
@@ -612,7 +613,7 @@ export const register: Register = on => {
             <Button key="close" role="dismiss" label="✕ Close" onPress={() => closeCrew($)} />
           </Box>
           <Text dimColor>
-            effort {ev.isAuto ? 'auto' : 'yours'}{ev.level ? ` · ${ev.level}` : ''}{ev.why && ev.isAuto ? ` (${ev.why})` : ''}
+            effort {ev.isAuto ? 'auto' : 'yours'}{ev.level ? ` · ${ev.level}` : ''}{ev.why && ev.isAuto && ev.why !== 'auto' ? ` (${ev.why})` : ''}
           </Text>
         </Box>
 
@@ -632,12 +633,17 @@ export const register: Register = on => {
 
         {asks.length + todo.length > 0 ? (
           <Box flexDirection="column">
-            {heading('Needs you', 'yellow')}
+            <Box justifyContent="space-between">
+              {heading(`Needs you · ${asks.length + list.length}`, 'yellow')}
+              {list.length > 1 && <Button key="clear" label="Clear all" onPress={() => setChecks($, () => [])} />}
+            </Box>
             {asks.map(q => <Text key="ask" color="yellow">? {fit(q, width - 2)}</Text>)}
             {todo.map(({ c, i }) => (
               <Box key={`check${i}`}>
-                <Text>☐ {fit(c, width - 12)}  </Text>
                 <Button key={`tick${i}`} label="✓ Done" onPress={() => setChecks($, old => old.filter(x => x !== c))} />
+                <Box marginLeft={1} flexShrink={1}>
+                  <Text>{c}</Text>
+                </Box>
               </Box>
             ))}
           </Box>
@@ -646,14 +652,21 @@ export const register: Register = on => {
         )}
 
         <Box flexDirection="column">
-          {heading('Agents')}
+          {heading(`Agents · ${rows.length - 1}`)}
           {live.length > 0 ? live.map(agent) : <Text dimColor>No agents yet.</Text>}
         </Box>
 
         <Box flexDirection="column">
           {heading('What the orders did')}
           {recent.length > 0
-            ? recent.map((l, i) => <Text key={i} dimColor={l.kind !== 'asked'}>{logLine(l, v.now, width - 22)}</Text>)
+            ? recent.map((l, i) => (
+                <Box key={i}>
+                  <Text dimColor>{logHead(l, v.now)} </Text>
+                  <Box flexShrink={1}>
+                    <Text dimColor={l.kind !== 'asked'}>{logBody(l)}</Text>
+                  </Box>
+                </Box>
+              ))
             : <Text dimColor>Nothing yet. They step in when Claude ends on a question.</Text>}
         </Box>
 

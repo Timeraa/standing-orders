@@ -8,10 +8,10 @@ test('agents nest under their parent, live before finished, orphans under main',
 })
 
 test('a log line reads time, verb and the reply', () => {
-  expect(logLine({ at: 0, kind: 'asked', text: 'Deploy?' }, 120_000)).toBe('?  2m ago  asked you: Deploy?')
+  expect(logLine({ at: 0, kind: 'asked', text: 'Deploy?' }, 120_000)).toBe('?  2m  asked you: Deploy?')
 })
 
 test('bars and truncation', () => {
-  expect(bar(50, 4)).toBe('▰▰▱▱')
+  expect(bar(50, 4)).toBe('━━──')
   expect(fit('abcdef', 4)).toBe('abc…')
 })

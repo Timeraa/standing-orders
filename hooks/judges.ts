@@ -223,16 +223,19 @@ export function agoText(ms: number) {
 
 const MARK = { answered: '✓', drafted: '✎', asked: '?', stopped: '■' }
 const VERB = { answered: 'sent', drafted: 'drafted', asked: 'asked you', stopped: 'finished' }
-export function logLine(e: { at: number; kind: keyof typeof MARK; text: string }, now: number, width = 70) {
-  return `${MARK[e.kind]} ${agoText(now - e.at).padStart(3)} ago  ${VERB[e.kind]}: ${fit(e.text.replace(/\s+/g, ' '), width)}`
-}
+export const logHead = (e: { at: number; kind: keyof typeof MARK }, now: number) =>
+  `${MARK[e.kind]} ${agoText(now - e.at).padStart(3)}`
+export const logBody = (e: { kind: keyof typeof MARK; text: string }) =>
+  `${VERB[e.kind]}: ${e.text.replace(/\s+/g, ' ').slice(0, 240)}`
+export const logLine = (e: { at: number; kind: keyof typeof MARK; text: string }, now: number) =>
+  `${logHead(e, now)}  ${logBody(e)}`
 
 export const fit = (text: string, n: number) =>
   n > 1 && text.length > n ? `${text.slice(0, n - 1)}…` : text
 
 export const bar = (percent: number, cells = 8) => {
   const full = Math.round((Math.min(100, Math.max(0, percent)) / 100) * cells)
-  return '▰'.repeat(full) + '▱'.repeat(cells - full)
+  return '━'.repeat(full) + '─'.repeat(cells - full)
 }
 
 export function clock(ms: number) {
