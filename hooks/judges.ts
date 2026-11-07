@@ -37,6 +37,8 @@ subagents: auto
 model: auto
 models: sonnet, opus
 cache-ttl: 60
+motion: on
+band: mode, answered, effort, ctx, cache, hint, autopilot
 `
 
 export const REPO_ORDERS = '.claude/standing-orders.md'
@@ -187,6 +189,21 @@ export type Orders = {
   isModelAuto: boolean
   models: ModelName[]
   cacheTtlMin: number
+  /** Animations in the band and the pane (a spinner, easing bars, a flash on a new entry). */
+  isMotionOn: boolean
+  /** What the line above the prompt shows. */
+  band: BandItem[]
+}
+
+/** The parts of the line above the prompt, in the order drawn. */
+export const BAND_ITEMS = ['mode', 'answered', 'effort', 'ctx', 'limit', 'cache', 'hint', 'autopilot'] as const
+export type BandItem = (typeof BAND_ITEMS)[number]
+export const BAND_DEFAULT: readonly BandItem[] = ['mode', 'answered', 'effort', 'ctx', 'cache', 'hint', 'autopilot']
+
+export function parseBand(raw: string | undefined): BandItem[] {
+  if (raw === undefined) return [...BAND_DEFAULT]
+  const want = raw.toLowerCase().split(/[,\s]+/)
+  return BAND_ITEMS.filter(i => want.includes(i))
 }
 
 // A setting's every line, in order: the global file's first, the repo's after.
@@ -206,10 +223,15 @@ export function parseModels(raw: string | undefined): ModelName[] {
 }
 
 // Set `key: value` in a settings file: replace the last such line, or append one.
-export function setSetting(text: string, key: string, value: string) {
+// `all`: a list that adds up over several lines (always-ask) keeps one line, the first.
+export function setSetting(text: string, key: string, value: string, all = false) {
   const re = new RegExp(`^${key}:.*$`, 'gim')
   const hits = [...text.matchAll(re)]
   const line = `${key}: ${value}`
+  if (all && hits.length > 1) {
+    for (const hit of hits.slice(1).reverse()) text = text.slice(0, hit.index) + text.slice((hit.index ?? 0) + hit[0].length).replace(/^\n/, '')
+    return setSetting(text, key, value)
+  }
   const last = hits.at(-1)
   if (!last || last.index === undefined) return `${text.replace(/\n*$/, '\n')}${line}\n`
   return text.slice(0, last.index) + line + text.slice(last.index + last[0].length)
@@ -258,6 +280,8 @@ export function parseOrders(global: string, repo = ''): Orders {
     isModelAuto: (setting(global, 'model') ?? 'off').toLowerCase() === 'auto',
     models: parseModels(setting(global, 'models')),
     cacheTtlMin: num(setting(repo, 'cache-ttl') ?? setting(global, 'cache-ttl'), 60),
+    isMotionOn: (setting(global, 'motion') ?? 'on').toLowerCase() !== 'off',
+    band: parseBand(setting(global, 'band')),
   }
 }
 
@@ -403,7 +427,10 @@ The line above the prompt (click the mode to cycle it; Autopilot opens the pane)
   ctx N%                          context used (yellow from 80%)
   cache m:ss / cache cold         time left on the prompt cache; replying
                                   before it runs out is cheaper
+  limit N%                        usage limit (off by default)
   no repo orders                  this repo has no orders file yet
+  Which of these show is yours to choose: /autopilot, Settings, Status line
+  (the band: line of your orders file).
 
 Model: with model: auto, a brand-new chat (no history yet) lets Haiku pick the
 model from your first message, among the models: line (default sonnet, opus).
@@ -423,7 +450,7 @@ for it always wins.
 Files:
 - ~/.claude/standing-orders.md: your rules for every repo, plus the settings
   always-ask, max-auto, effort, effort-min, effort-max, subagents, model, models,
-  cache-ttl. /orders setup (or /autopilot, Settings) changes them. Claude sees
+  cache-ttl, motion, band. /orders setup (or /autopilot, Settings) changes them. Claude sees
   edits in the next chat.
 - .claude/standing-orders.md: this repo's additions, from /orders init. Its
   always-ask words add to yours and it can lower max-auto, set effort: off or

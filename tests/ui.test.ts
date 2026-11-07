@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { DEFAULT_ORDERS, fit, isPick, logBody, logLine, pickText } from '../hooks/judges'
+import { DEFAULT_ORDERS, fit, isPick, logBody, logLine, parseBand, parseOrders, pickText, setSetting } from '../hooks/judges'
+import { barCells, ease, shimmerWindow } from '../hooks/motion'
 
 declare const setTimeout: (fn: () => void, ms: number) => unknown
 const settle = async () => {
@@ -98,7 +99,22 @@ test('the band and the Autopilot pane draw: Now, then Settings, whose buttons wr
     expect(await band.find({ type: 'Button', label: 'Autopilot · 7 to do' })).toBeTruthy()
     expect(await band.find({ type: 'Button', text: /agents/ })).toBeFalsy()
     expect(await band.find({ type: 'Button', label: /Orders/ })).toBeTruthy()
+    expect(await band.find({ type: 'Client' })).toBeFalsy() // idle: nothing animates
     await band.unmount()
+
+    // while the judge decides: a spinner on the terminal, plain text elsewhere
+    await set('effort', { level: 'high', why: '', isAuto: true, isJudging: true, isSaving: false })
+    const judging = await $.ui.mount({ plugin: 'standing-orders', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: true, maxRows: 10 } })
+    if (surface === 'terminal') {
+      expect((await judging.find({ type: 'Client', key: 'judging' }))?.props?.props).toMatchObject({ kind: 'spinner', label: 'deciding' })
+      expect(await judging.find({ type: 'Text', text: /⠋/, in: 'judging' })).toBeTruthy() // the first frame
+      expect(await judging.find({ type: 'Text', text: /deciding/, in: 'judging' })).toBeTruthy()
+    } else {
+      expect(await judging.find({ type: 'Text', text: /effort: deciding/ })).toBeTruthy()
+    }
+    expect(await judging.find({ type: 'Text', text: /High/ })).toBeFalsy()
+    await judging.unmount()
+    await seed()
 
     let pane = await $.ui.mount(PANE(surface))
     // The stand-in state has no readers to redraw, so each press mounts the pane again.
@@ -130,9 +146,24 @@ test('the band and the Autopilot pane draw: Now, then Settings, whose buttons wr
     ]) expect(await pane.find({ type: 'Text', text: line })).toBeTruthy()
     expect(await pane.find({ type: 'Text', text: /Ancient reply 0/ })).toBeFalsy()
     expect(await pane.find({ type: 'Text', text: /this session/ })).toBeTruthy()
-    expect((await pane.find({ type: 'Text', text: /ctx/ }))?.text).toBe('ctx 41%')
-    expect((await pane.find({ type: 'Text', text: /limit/ }))?.text).toBe('limit 20%')
-    expect((await pane.find({ type: 'Text', text: /cache/ }))?.text).toBe('cache 51:40 left')
+    if (surface === 'terminal') {
+      // the footer is three motion bars, each told its value as plain props
+      const bar = async (n: string) => (await pane.find({ type: 'Client', key: `bar-${n}` }))?.props?.props
+      expect(await bar('ctx')).toMatchObject({ kind: 'bar', percent: 41, text: '41%', color: 'green' })
+      expect(await bar('limit')).toMatchObject({ kind: 'bar', percent: 20, text: '20%' })
+      // and what the module itself draws: the track, the edge and the value
+      expect((await pane.find({ type: 'Text', text: /█/, in: 'bar-ctx' }))?.text).toBe(barCells(41, 24))
+      expect(await pane.find({ type: 'Text', text: /41%/, in: 'bar-ctx' })).toBeTruthy()
+      expect(await bar('cache')).toMatchObject({ kind: 'bar', text: '51:40 left', color: 'cyan' })
+      expect(Math.round(((await bar('cache')) as { percent: number }).percent)).toBe(86)
+      // the newest entry is long past: nothing is flashing or spinning at rest
+      expect((await pane.findAll({ type: 'Client' })).map((c: any) => c.props.key).filter((k: string) => !k.startsWith('bar-'))).toEqual([])
+    } else {
+      expect(await pane.find({ type: 'Client' })).toBeFalsy()
+      expect((await pane.find({ type: 'Text', text: /ctx/ }))?.text).toBe('ctx 41%')
+      expect((await pane.find({ type: 'Text', text: /limit/ }))?.text).toBe('limit 20%')
+      expect((await pane.find({ type: 'Text', text: /cache/ }))?.text).toBe('cache 51:40 left')
+    }
     // agents are not listed here any more
     expect(await pane.find({ type: 'Text', text: /Agents|Finished|lane-icons/ })).toBeFalsy()
     expect(await pane.find({ type: 'Button', text: /undefined/ })).toBeFalsy()
@@ -268,8 +299,9 @@ test('the refresh fills the footer from usage; first run and /orders setup open 
   expect(await pane.find({ type: 'Text', text: /Repo orders/ })).toBeTruthy()
   expect(await pane.find({ type: 'Button', label: 'Write them' })).toBeTruthy()
   await press('now')
-  expect((await pane.find({ type: 'Text', text: /ctx/ }))?.text).toBe('ctx 63%')
-  expect((await pane.find({ type: 'Text', text: /limit/ }))?.text).toBe('limit 90%')
+  const bar = async (n: string) => (await pane.find({ type: 'Client', key: `bar-${n}` }))?.props?.props
+  expect(await bar('ctx')).toMatchObject({ percent: 63, text: '63%', color: 'green' })
+  expect(await bar('limit')).toMatchObject({ percent: 90, text: '90%', color: 'red' })
   expect(await pane.find({ type: 'Text', text: /lane-icons/ })).toBeFalsy() // agents are not listed
   await pane.unmount()
 
@@ -342,4 +374,172 @@ test('log lines: decisions read with a colon, picks read as a sentence', () => {
   expect(pickText('opus', '  ')).toBe('opus')
   expect(['answered', 'asked', 'effort', 'model', 'subagent'].map(k => isPick(k as never))).toEqual([false, false, true, true, true])
   expect(fit('abcdef', 4)).toBe('abc…')
+})
+
+// A new entry flashes on the terminal and nowhere else; an old one, or motion turned off, is plain.
+test('only the newest, fresh Activity entry is wrapped in the flash; motion: off and other surfaces are static', async ($: any, on: any) => {
+  const clock = mock.clock(on)
+  const set = store(on)
+  let file = DEFAULT_ORDERS
+  on('command.register', () => ({ value: { command: 'orders' } }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('env.get', () => ({ value: '/home/t' }))
+  on('fs.read', (_: unknown, e: { path: string }) => (e.path.startsWith('/repo/') ? { deny: 'missing' } : { value: file }))
+  on('fs.write', (_: unknown, e: { text: string }) => {
+    file = e.text
+    return { value: undefined }
+  })
+  on('store.get', () => ({ value: undefined }))
+  on('agent.list', () => ({ value: [] }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await settle()
+  await clock.advance(1_000_000)
+  let now: number = clock.now()
+  await set('tab', 'now')
+  await set('checks', [{ text: 'Try it on a device', at: now - 400, chat: 'a' }])
+  await set('log', [
+    { at: now - 60_000, kind: 'answered', text: 'Older reply' },
+    { at: now - 500, kind: 'effort', text: pickText('high', 'fresh pick') },
+  ])
+  const flashes = async (surface: 'terminal' | 'desktop') => {
+    const pane = await $.ui.mount(PANE(surface))
+    const found = (await pane.findAll({ type: 'Client' })).map((c: any) => c.props.key as string).filter((k: string) => k.startsWith('flash'))
+    const plain = await pane.find({ type: 'Text', text: /Older reply/ })
+    await pane.unmount()
+    return { found, plain: !!plain }
+  }
+  const t = await flashes('terminal')
+  expect(t.found).toEqual([`flash-check-${now - 400}`, `flash-log-${now - 500}`])
+  expect(t.plain).toBe(true) // only the newest entry of a list flashes
+  expect((await flashes('desktop')).found).toEqual([])
+
+  await clock.advance(5_000) // seconds later: settled
+  now = clock.now()
+  expect((await flashes('terminal')).found).toEqual([])
+
+  await set('log', [{ at: now - 100, kind: 'effort', text: pickText('low', 'fresh again') }])
+  expect((await flashes('terminal')).found).toEqual([`flash-log-${now - 100}`])
+})
+
+// Every setting has a control in Settings and every click saves to the file.
+test('Settings customize the status line, replies, models, cache and motion', async ($: any, on: any) => {
+  mock.clock(on)
+  const set = store(on)
+  let file = DEFAULT_ORDERS
+  const written: string[] = []
+  on('command.register', () => ({ value: { command: 'orders' } }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('env.get', () => ({ value: '/home/t' }))
+  on('fs.read', (_: unknown, e: { path: string }) => (e.path.startsWith('/repo/') ? { deny: 'missing' } : { value: file }))
+  on('fs.write', (_: unknown, e: { text: string }) => {
+    file = e.text
+    written.push(e.text)
+    return { value: undefined }
+  })
+  on('store.get', () => ({ value: undefined }))
+  on('agent.list', () => ({ value: [] }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await settle()
+  await set('tab', 'settings')
+  await set('vitals', { now: 600_000, contextPercent: 41, lastResponseAt: 100_000, cacheTtlMin: 60, ratePercent: 20, hasRepoOrders: true })
+  const band = async (surface: 'terminal' | 'desktop' = 'terminal') => {
+    const b = await $.ui.mount({ plugin: 'standing-orders', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10 } })
+    const text = async (re: RegExp) => !!(await b.find({ type: 'Text', text: re }))
+    const out = { ctx: await text(/ctx 41%/), limit: await text(/limit 20%/), cache: await text(/cache/), auto: (await b.findAll({ type: 'Button' })).some((x: any) => (x.label ?? x.text) === 'Autopilot') }
+    await b.unmount()
+    return out
+  }
+  let pane = await $.ui.mount(PANE('terminal'))
+  const press = async (key: string) => {
+    await pane.press({ key })
+    await pane.unmount()
+    pane = await $.ui.mount(PANE('terminal'))
+  }
+
+  expect(await band()).toEqual({ ctx: true, limit: false, cache: true, auto: true })
+  // each part of the line above the prompt toggles; the order stays fixed
+  await press('band-limit')
+  expect(written.at(-1)).toContain('band: mode, answered, effort, ctx, limit, cache, hint, autopilot')
+  await press('band-ctx')
+  expect(written.at(-1)).toContain('band: mode, answered, effort, limit, cache, hint, autopilot')
+  await press('band-autopilot')
+  expect(await band()).toEqual({ ctx: false, limit: true, cache: true, auto: false })
+  await press('band-autopilot')
+  await press('band-ctx')
+  await press('band-limit')
+  expect(parseOrders(file).band).toEqual(parseBand(undefined))
+
+  // replies: the cap, then the always-ask words
+  await press('maxauto-inc')
+  expect(written.at(-1)).toContain('max-auto: 9')
+  await press('maxauto-dec')
+  await press('maxauto-dec')
+  expect(written.at(-1)).toContain('max-auto: 7')
+  await pane.input({ key: `term-add-${parseOrders(DEFAULT_ORDERS).terms.length}`, text: 'migrate, publish' })
+  await pane.unmount()
+  pane = await $.ui.mount(PANE('terminal'))
+  expect(parseOrders(file).terms).toContain('migrate')
+  expect(parseOrders(file).terms).toContain('publish')
+  await press('term-migrate')
+  expect(parseOrders(file).terms).not.toContain('migrate')
+  expect(parseOrders(file).terms).toContain('publish')
+  expect(file.match(/^always-ask:/gm)?.length).toBe(1)
+
+  // models a new chat may pick from: never an empty list
+  await press('model-fable')
+  expect(parseOrders(file).models).toEqual(['sonnet', 'opus', 'fable'])
+  await press('model-sonnet')
+  await press('model-opus')
+  await press('model-fable')
+  expect(parseOrders(file).models).toEqual(['fable'])
+  await press('model-fable') // the last one stays
+  expect(parseOrders(file).models).toEqual(['fable'])
+
+  // the prompt cache window and motion
+  await press('ttl')
+  expect(parseOrders(file).cacheTtlMin).toBe(5)
+  await press('motion')
+  expect(parseOrders(file).isMotionOn).toBe(false)
+  await set('tab', 'now')
+  await set('effort', { level: 'high', why: 'x', isAuto: true, isJudging: true, isSaving: false })
+  await pane.unmount()
+  pane = await $.ui.mount(PANE('terminal'))
+  expect(await pane.find({ type: 'Client', key: 'judging' })).toBeFalsy() // motion off: static even on the terminal
+  expect(await pane.find({ type: 'Text', text: /deciding/ })).toBeTruthy()
+  expect((await pane.findAll({ type: 'Client' })).length).toBe(0)
+  await pane.unmount()
+})
+
+test('motion helpers: bars, the shimmer window, the easing', () => {
+  expect(barCells(0, 8)).toBe('░░░░░░░░')
+  expect(barCells(100, 8)).toBe('████████')
+  expect(barCells(50, 8)).toBe('████░░░░')
+  expect(barCells(41, 10)).toBe('████▏░░░░░') // 4.1 cells: four full and a sliver
+  expect(barCells(45, 10)).toBe('████▌░░░░░')
+  expect(barCells(45, 10, true)).toBe('#####-----')
+  expect([...barCells(33, 12)].length).toBe(12)
+  expect(barCells(-5, 4)).toBe('░░░░')
+  expect(barCells(Number.NaN, 4)).toBe('░░░░')
+  expect(barCells(250, 4)).toBe('████')
+  expect(shimmerWindow('deciding'.length, 0)).toEqual([0, 0])
+  expect(shimmerWindow(8, 2)).toEqual([0, 2])
+  expect(shimmerWindow(8, 5)).toEqual([2, 5])
+  expect(shimmerWindow(8, 10)).toEqual([7, 8])
+  expect(shimmerWindow(8, 11)).toEqual([0, 0]) // wrapped
+  expect(shimmerWindow(0, 4)).toEqual([0, 0])
+  expect(ease(0, 100, 0)).toBe(0)
+  expect(ease(0, 100, 300)).toBe(100)
+  expect(ease(40, 20, 999)).toBe(20)
+  expect(ease(0, 100, 150)).toBe(75)
+})
+
+test('band setting: the default, a custom list, and none', () => {
+  expect(parseBand(undefined)).toEqual(['mode', 'answered', 'effort', 'ctx', 'cache', 'hint', 'autopilot'])
+  expect(parseBand('ctx, mode, bogus')).toEqual(['mode', 'ctx'])
+  expect(parseBand('')).toEqual([])
+  expect(parseOrders('band: limit').band).toEqual(['limit'])
+  expect(parseOrders('').isMotionOn).toBe(true)
+  expect(parseOrders('motion: off').isMotionOn).toBe(false)
+  // a list that adds up over lines collapses to one when written back
+  expect(setSetting('always-ask: a, b\nmax-auto: 8\nalways-ask: c\n', 'always-ask', 'a', true)).toBe('always-ask: a\nmax-auto: 8\n')
 })

@@ -33,9 +33,10 @@ function engine(on: any, level: string): Seen {
   return seen
 }
 
+// desktop on purpose: on the terminal the newest Activity entry sits inside a flash Client, which a plain Text find cannot see.
 const PANE = {
   plugin: 'standing-orders',
-  surface: 'terminal',
+  surface: 'desktop',
   component: 'Pane',
   requestId: 'autopilot',
   props: { title: 'Autopilot', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },

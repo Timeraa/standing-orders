@@ -59,12 +59,17 @@ The line above the prompt has two buttons: the mode label (click to cycle draft 
 - mode, answers given, and buttons for Draft/Auto and Pause;
 - **Needs you**: the pending question, then things only you can check (a real device, an account, another person), each with a **Done** button and its age. It never holds what Claude could run or look up itself. Each judged turn replaces its own chat's earlier items, the judge ticks off ones the conversation shows are done, and items drop after 3 days. The pane shows the newest five with a **+N older** button;
 - **Activity**: the last 8 things the mod did, newest first. Decisions (`✓` sent, `✎` drafted, `?` asked you, `■` finished) and dimmed picks with their reason, for example `◆ effort high · multi-file feature`, `◇ new chat → opus · hard debugging`, `◇ subagent → haiku/low · grep the repo`. A line below counts this session's picks;
-- one footer line: context, limit and prompt-cache time left, coloured by how full they are.
+- **Usage**: context, limit and prompt-cache time left as bars, coloured by how full they are (one text line in a narrow pane).
+
+Sections are bordered cards that light up under the pointer. Motion is calm: a spinner while the effort is being picked, bars that ease to a new value, and a short highlight on the newest entry. Nothing moves at rest, and it is plain text off the terminal.
 
 **Settings** (every click saves to your orders file)
 
 - **Effort**: a button cycles auto, each level and off; with auto, buttons step the floor and ceiling or reset them;
-- **New chats** and **Subagents**: turn auto model and auto subagents on or off;
+- **New chats** and **Subagents**: turn auto model and auto subagents on or off; choose which models a new chat may pick from;
+- **Replies**: how many answers auto mode sends in a row, and your always-ask words (click one to remove it, type to add);
+- **Status line**: which parts the line above the prompt shows (mode, answered, effort, ctx, limit, cache, repo-orders hint, the Autopilot button) and how long your prompt cache lasts;
+- **Motion**: turn the animations off;
 - **Repo orders**: whether this repo has its own file, with a button to have Claude write it.
 
 The pane body scrolls, so a long Needs you list never pushes the rest off.
@@ -100,6 +105,8 @@ subagents: auto
 model: auto
 models: sonnet, opus
 cache-ttl: 60
+motion: on
+band: mode, answered, effort, ctx, cache, hint, autopilot
 ```
 
 A repo's file can come from any clone, so it may only tighten things: its `always-ask` words add to yours, its `max-auto` can only lower yours, and it may set `effort: off` and `cache-ttl`. Every other setting is read from your own file alone.
@@ -135,6 +142,7 @@ After edits: `claude plugin update standing-orders@standing-orders` and restart.
 
 - `hooks/judges.ts`: pure parts (prompts, parsers, log lines). Tested directly.
 - `hooks/register.tsx`: the mod itself (judge loop, commands, band, the Autopilot pane).
+- `hooks/motion.tsx`: the surface module for the animated bits (spinner, bars, flash); pure drawing, no engine access.
 - `tests/`: runs with `claude plugin test`.
 
 ## Contributing

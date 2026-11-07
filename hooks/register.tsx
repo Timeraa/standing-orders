@@ -37,6 +37,9 @@ import {
   parseVerdict,
   pickText,
   takesEffort,
+  BAND_ITEMS,
+  MODEL_NAMES,
+  type BandItem,
   type Effort,
   type ModelName,
 } from './judges'
@@ -103,6 +106,8 @@ const ctx = {
 
 // A turn this long that ends without a question still tells the person.
 const LONG_TURN_MS = 180_000
+// A new entry stays highlighted this long (the module's flash itself lasts under a second).
+const FLASH_WINDOW_MS = 1500
 const firstLine = (text: string) => text.trim().split('\n')[0]?.slice(0, 160) || 'Finished.'
 
 async function notifyLong($: EngineInterface, ms: number, text: string) {
@@ -140,7 +145,7 @@ async function writeSetting($: EngineInterface, pairs: Record<string, string>) {
   } catch {
     text = DEFAULT_ORDERS
   }
-  for (const [k, v] of Object.entries(pairs)) text = setSetting(text, k, v)
+  for (const [k, v] of Object.entries(pairs)) text = setSetting(text, k, v, k === 'always-ask')
   await $.fs.write(ctx.globalPath, text)
   await loadOrders($)
 }
@@ -373,6 +378,9 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 // Meters run green, yellow, red; effort runs cool to hot.
 const heat = (percent: number) => (percent >= 90 ? 'red' : percent >= 70 ? 'yellow' : 'green')
 const EFFORT_COLOR: Record<string, string> = { low: 'green', medium: 'cyan', high: 'magenta', xhigh: 'red' }
+
+// Only the terminal's and the desktop's tables have a Client; it is drawn on the terminal alone (see `fx`).
+const clientOf = (ui: object) => (ui as { Client: any }).Client
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -649,44 +657,66 @@ export const register: Register = on => {
       read($, effort),
       read($, vitals),
     ])
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
+    const { Box, Text, Button } = ui
+    const Client = clientOf(ui)
+    // Motion only where a Client is drawn and the person has not turned it off.
+    const fx = ctx.orders.isMotionOn && e.surface === 'terminal'
+    const show = (i: BandItem) => ctx.orders.band.includes(i)
 
     const label = paused ? 'Orders paused' : m === 'auto' ? 'Orders: auto' : 'Orders: draft'
-    const effortText = ev.isJudging
-      ? 'effort: deciding'
-      : ev.level
-        ? `${ev.model ? `${cap(ev.model)} · ` : ''}${cap(ev.level)}${ev.isAuto ? '' : ' (yours)'}${ev.isSaving ? ' · save' : ''}`
-        : ''
+    const effortText = ev.level
+      ? `${ev.model ? `${cap(ev.model)} · ` : ''}${cap(ev.level)}${ev.isAuto ? '' : ' (yours)'}${ev.isSaving ? ' · save' : ''}`
+      : ''
     const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
     const isCold = left !== null && left <= 0
+
+    // What the line shows is the person's choice (Settings, Status line).
+    const parts: [string, any][] = []
+    if (show('mode')) {
+      parts.push(['mode', <Button key="mode" label={`${paused ? '⏸' : m === 'auto' ? '▶' : '✎'} ${label}`} onPress={() => cycle($)} />])
+    }
+    if (show('answered') && s.autoCount > 0) parts.push(['answered', <Text dimColor>answered {s.autoCount}</Text>])
+    if (show('effort')) {
+      if (ev.isJudging) {
+        parts.push([
+          'effort',
+          fx ? (
+            <Box>
+              <Text dimColor>effort </Text>
+              <Client key="judging" module="./motion.tsx" props={{ kind: 'spinner', label: 'deciding' }} />
+            </Box>
+          ) : (
+            <Text dimColor>effort: deciding</Text>
+          ),
+        ])
+      } else if (effortText !== '') {
+        parts.push(['effort', <Text color={ev.level ? EFFORT_COLOR[ev.level] : undefined}>{effortText}</Text>])
+      }
+    }
+    if (show('ctx') && v.contextPercent !== null) {
+      parts.push(['ctx', <Text color={heat(v.contextPercent)}>ctx {Math.round(v.contextPercent)}%</Text>])
+    }
+    if (show('limit') && v.ratePercent !== null) {
+      parts.push(['limit', <Text color={heat(v.ratePercent)}>limit {Math.round(v.ratePercent)}%</Text>])
+    }
+    if (show('cache') && left !== null) {
+      parts.push(['cache', <Text color={isCold ? 'yellow' : 'cyan'}>{isCold ? 'cache cold' : `cache ${clock(left)}`}</Text>])
+    }
+    if (show('hint') && !v.hasRepoOrders) parts.push(['hint', <Text dimColor>no repo orders: /orders init</Text>])
+    if (show('autopilot')) {
+      parts.push(['autopilot', <Button key="autopilot" label={list.length > 0 ? `Autopilot · ${list.length} to do` : 'Autopilot'} onPress={() => openPane($)} />])
+    }
 
     return (
       <Box flexDirection="column">
         <Box>
-          <Button
-            key="mode"
-            label={`${paused ? '⏸' : m === 'auto' ? '▶' : '✎'} ${label}`}
-            onPress={() => cycle($)}
-          />
-          {s.autoCount > 0 && <Text dimColor> · answered {s.autoCount}</Text>}
-          {effortText !== '' && <Text color={ev.level ? EFFORT_COLOR[ev.level] : undefined}> · {effortText}</Text>}
-          {v.contextPercent !== null && (
-            <Text color={heat(v.contextPercent)}>
-              {' '}· ctx {Math.round(v.contextPercent)}%
-            </Text>
-          )}
-          {left !== null && (
-            <Text color={isCold ? 'yellow' : 'cyan'}>
-              {' '}· {isCold ? 'cache cold' : `cache ${clock(left)}`}
-            </Text>
-          )}
-          {!v.hasRepoOrders && <Text dimColor> · no repo orders: /orders init</Text>}
-          <Text> · </Text>
-          <Button
-            key="autopilot"
-            label={list.length > 0 ? `Autopilot · ${list.length} to do` : 'Autopilot'}
-            onPress={() => openPane($)}
-          />
+          {parts.map(([k, node], i) => (
+            <Box key={`part-${k}`}>
+              {i > 0 && <Text dimColor> · </Text>}
+              {node}
+            </Box>
+          ))}
         </Box>
         {s.pending && <Text color="yellow" bold>⚠ Needs you: {s.pending}</Text>}
       </Box>
@@ -694,23 +724,49 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button } = $.ui.resolve(e)
-    const [t, v, s, list, paused, m, ev, entries, tl, isOpen] = await Promise.all([
+    const ui = $.ui.resolve(e)
+    const { Box, Text, Button, Input } = ui
+    const Client = clientOf(ui)
+    const [t, v, s, list, paused, m, ev, entries, tl, isOpen, now] = await Promise.all([
       read($, tab), read($, vitals), read($, run), read($, checks),
       read($, isPaused), read($, mode), read($, effort), read($, log), read($, counts), read($, isChecksOpen),
+      $.clock.now(),
     ])
     // The pane body scrolls, so nothing here is squeezed to a height.
     const width = Math.max(30, e.props.bodyColumns ?? 60)
-    const heading = (text: string, color?: string) => <Text bold color={color}>{text}</Text>
+    const fx = ctx.orders.isMotionOn && e.surface === 'terminal'
     const goTo = (to: 'now' | 'settings') => () => update($, tab, () => to)
+    const tabBtn = (id: 'now' | 'settings', text: string) =>
+      t === id ? (
+        <Text bold underline color="cyan">{text}</Text>
+      ) : (
+        <Button key={id} dimColor label={text} hover={{ scope: `tab-${id}`, color: 'cyan', underline: true }} onPress={goTo(id)} />
+      )
     const tabs = (
       <Box justifyContent="space-between">
-        <Box>
-          {t === 'now' ? <Text bold color="cyan">● Now</Text> : <Button key="now" label="Now" onPress={goTo('now')} />}
-          <Text>  </Text>
-          {t === 'settings' ? <Text bold color="cyan">● Settings</Text> : <Button key="settings" label="Settings" onPress={goTo('settings')} />}
+        <Box gap={2}>
+          {tabBtn('now', 'Now')}
+          {tabBtn('settings', 'Settings')}
         </Box>
-        <Button key="close" role="dismiss" label="✕ Close" onPress={() => closePane($)} />
+        <Button key="close" role="dismiss" dimColor label="✕ Close" onPress={() => closePane($)} />
+      </Box>
+    )
+    // A bordered card: dim at rest, its own colour under the pointer, yellow when it needs the person.
+    const card = (key: string, title: string, color: string, body: any, opts: { hot?: boolean; right?: any } = {}) => (
+      <Box
+        key={`card-${key}`}
+        flexDirection="column"
+        borderStyle="round"
+        borderColor={opts.hot ? 'yellow' : undefined}
+        borderDimColor={!opts.hot}
+        paddingX={1}
+        hover={{ borderColor: opts.hot ? 'yellow' : color, borderDimColor: false }}
+      >
+        <Box justifyContent="space-between">
+          <Text bold color={color}>{title}</Text>
+          {opts.right}
+        </Box>
+        {body}
       </Box>
     )
 
@@ -718,45 +774,106 @@ export const register: Register = on => {
       // The person's own file, so a repo's orders are never written back into it.
       const mine = ctx.mine
       const choice = effortChoice()
-      const control = (icon: string, name: string, color: string, value: string, hint: string, buttons: any) => (
-        <Box flexDirection="column">
-          <Box justifyContent="space-between">
-            <Box flexShrink={1}>
-              <Text color={color} bold>{icon} {name.padEnd(13)}</Text>
-              <Text wrap="truncate-end">{value}</Text>
+      const control = (key: string, icon: string, name: string, color: string, value: string, hint: string, buttons: any, extra?: any) =>
+        card(
+          key,
+          `${icon} ${name}`,
+          color,
+          <Box flexDirection="column">
+            <Box justifyContent="space-between">
+              <Box flexShrink={1}>
+                <Text wrap="truncate-end">{value}</Text>
+              </Box>
+              <Box flexShrink={0}>{buttons}</Box>
             </Box>
-            <Box flexShrink={0}>{buttons}</Box>
-          </Box>
-          <Text dimColor>  {hint}</Text>
-        </Box>
-      )
+            <Text dimColor>{hint}</Text>
+            {extra}
+          </Box>,
+        )
       const onOff = (isOn: boolean, key: 'model' | 'subagents') => (
         <Button key={key} label={isOn ? 'Turn off' : 'Turn on'} onPress={() => writeSetting($, { [key]: isOn ? 'off' : 'auto' })} />
       )
+      // A row of toggles: ✓ on, ○ off. `last` keeps at least one on.
+      const chips = <T extends string>(prefix: string, all: readonly T[], active: readonly T[], save: (next: T[]) => void, last = false) => (
+        <Box flexWrap="wrap" columnGap={1}>
+          {all.map(name => {
+            const isOn = active.includes(name)
+            return (
+              <Button
+                key={`${prefix}-${name}`}
+                dimColor={!isOn}
+                label={`${isOn ? '✓' : '○'} ${name}`}
+                onPress={() => {
+                  const next = all.filter(x => (x === name ? !isOn : active.includes(x)))
+                  if (last && next.length === 0) return
+                  save(next)
+                }}
+              />
+            )
+          })}
+        </Box>
+      )
+      const addTerms = (raw: string) => {
+        const words = raw.split(',').map(w => w.trim()).filter(Boolean)
+        if (words.length) void writeSetting($, { 'always-ask': [...new Set([...mine.terms, ...words])].join(', ') })
+      }
+      const TTLS = [5, 15, 30, 60]
       return (
         <Box flexDirection="column" gap={1}>
           {tabs}
-          {control('◆', 'Effort', ev.level ? EFFORT_COLOR[ev.level] ?? 'magenta' : 'magenta',
+          {control('effort', '◆', 'Effort', ev.level ? EFFORT_COLOR[ev.level] ?? 'magenta' : 'magenta',
             `${!ev.isAuto ? 'yours' : mine.effortFixed ? `${mine.effortFixed} (fixed)` : `auto ${mine.effortMin}–${mine.effortMax}`}`,
             'auto picks low to xhigh thinking for every prompt you type; a level fixes it; off leaves /effort to you.',
-            <Button key="effort" label={`⟳ ${ev.isAuto ? choice : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />)}
-          {choice === 'auto' && (
-            <Box flexShrink={0}>
-              <Text wrap="truncate-end">  Range  </Text>
-              <Button key="floor" label={`floor ${mine.effortMin}${mine.effortMin === 'low' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-min': cycleOf(ctx.mine.effortMin, ['low', 'medium', 'high']) })} />
-              <Text>  </Text>
-              <Button key="ceiling" label={`ceiling ${mine.effortMax}${mine.effortMax === 'xhigh' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-max': cycleOf(ctx.mine.effortMax, ['medium', 'high', 'xhigh', 'max']) })} />
-              <Text>  </Text>
-              <Button key="reset" label="reset" onPress={() => writeSetting($, { 'effort-min': 'low', 'effort-max': 'xhigh' })} />
-            </Box>
-          )}
-          {control('◇', 'New chats', 'blue', mine.isModelAuto ? `auto · ${mine.models.join(' / ')}` : 'your /model',
-            'Sonnet or Opus from your first message, only while the chat is empty (cache-safe).',
+            <Button key="effort" label={`⟳ ${ev.isAuto ? choice : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />,
+            choice === 'auto' && (
+              <Box flexShrink={0} gap={1}>
+                <Text dimColor>Range</Text>
+                <Button key="floor" label={`floor ${mine.effortMin}${mine.effortMin === 'low' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-min': cycleOf(ctx.mine.effortMin, ['low', 'medium', 'high']) })} />
+                <Button key="ceiling" label={`ceiling ${mine.effortMax}${mine.effortMax === 'xhigh' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-max': cycleOf(ctx.mine.effortMax, ['medium', 'high', 'xhigh', 'max']) })} />
+                <Button key="reset" label="reset" onPress={() => writeSetting($, { 'effort-min': 'low', 'effort-max': 'xhigh' })} />
+              </Box>
+            ))}
+          {control('chats', '◇', 'New chats', 'blue', mine.isModelAuto ? `auto · ${mine.models.join(' / ')}` : 'your /model',
+            'Picks the model from your first message, only while the chat is empty (cache-safe). Choose which models it may use.',
             onOff(mine.isModelAuto, 'model'))}
-          {control('◇', 'Subagents', 'cyan', mine.isSubagentsAuto ? 'auto · model + effort per task' : 'inherit the chat',
+          {mine.isModelAuto && chips('model', MODEL_NAMES, mine.models, next => void writeSetting($, { models: next.join(', ') }), true)}
+          {control('subagents', '◇', 'Subagents', 'cyan', mine.isSubagentsAuto ? 'auto · model + effort per task' : 'inherit the chat',
             'Picks a model (Haiku for mechanical work) and effort for each helper from its task. Anything you named wins.',
             onOff(mine.isSubagentsAuto, 'subagents'))}
-          {control('◈', 'Repo orders', 'yellow', v.hasRepoOrders ? 'found' : 'none',
+          {card(
+            'replies', '✎ Replies', 'green',
+            <Box flexDirection="column" gap={1}>
+              <Box justifyContent="space-between">
+                <Text>Up to {mine.maxAuto} answers in a row in auto mode</Text>
+                <Box gap={1}>
+                  <Button key="maxauto-dec" label="−" onPress={() => writeSetting($, { 'max-auto': String(Math.max(1, mine.maxAuto - 1)) })} />
+                  <Button key="maxauto-inc" label="+" onPress={() => writeSetting($, { 'max-auto': String(Math.min(50, mine.maxAuto + 1)) })} />
+                </Box>
+              </Box>
+              <Text dimColor>Always ask you first when a reply or question mentions (click one to remove it):</Text>
+              <Box flexWrap="wrap" columnGap={1}>
+                {mine.terms.map(term => (
+                  <Button key={`term-${term}`} dimColor label={`${term} ✕`} onPress={() => writeSetting($, { 'always-ask': mine.terms.filter(x => x !== term).join(', ') })} />
+                ))}
+              </Box>
+              <Input key={`term-add-${mine.terms.length}`} placeholder="add words, comma separated" submitLabel="add" onSubmit={addTerms} />
+            </Box>,
+          )}
+          {card(
+            'band', '▤ Status line', 'yellow',
+            <Box flexDirection="column" gap={1}>
+              <Text dimColor>What the line above the prompt shows:</Text>
+              {chips('band', BAND_ITEMS, mine.band, next => void writeSetting($, { band: next.join(', ') }))}
+              <Box justifyContent="space-between">
+                <Text>Prompt cache lasts {mine.cacheTtlMin} min <Text dimColor>(a repo may set its own)</Text></Text>
+                <Button key="ttl" label="⟳ change" onPress={() => writeSetting($, { 'cache-ttl': String(cycleOf(ctx.mine.cacheTtlMin, TTLS)) })} />
+              </Box>
+            </Box>,
+          )}
+          {control('motion', '✦', 'Motion', 'magenta', mine.isMotionOn ? 'on · only while something happens' : 'off · static text',
+            'A spinner while effort is picked, bars that ease, a highlight on new entries. Nothing moves at rest.',
+            <Button key="motion" label={mine.isMotionOn ? 'Turn off' : 'Turn on'} onPress={() => writeSetting($, { motion: mine.isMotionOn ? 'off' : 'on' })} />)}
+          {control('repo', '◈', 'Repo orders', 'yellow', v.hasRepoOrders ? 'found' : 'none',
             'This repo\'s own .claude/standing-orders.md: how to verify work here, what to ask first.',
             v.hasRepoOrders ? null : (
               <Button key="init" label="Write them" onPress={() => {
@@ -776,10 +893,18 @@ export const register: Register = on => {
     const shown = isOpen ? newest : newest.slice(0, SHOWN_CHECKS)
     const recent = [...entries].reverse().slice(0, 8)
     const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
-    const meters: [string, string, string][] = []
-    if (v.contextPercent !== null) meters.push(['ctx', heat(v.contextPercent), `ctx ${Math.round(v.contextPercent)}%`])
-    if (v.ratePercent !== null) meters.push(['limit', heat(v.ratePercent), `limit ${Math.round(v.ratePercent)}%`])
-    if (left !== null) meters.push(['cache', left <= 0 ? 'yellow' : 'cyan', left <= 0 ? 'cache cold' : `cache ${clock(left)} left`])
+    // [name, colour, percent, text]
+    const meters: [string, string, number, string][] = []
+    if (v.contextPercent !== null) meters.push(['ctx', heat(v.contextPercent), v.contextPercent, `${Math.round(v.contextPercent)}%`])
+    if (v.ratePercent !== null) meters.push(['limit', heat(v.ratePercent), v.ratePercent, `${Math.round(v.ratePercent)}%`])
+    if (left !== null) {
+      const ttl = v.cacheTtlMin * 60_000
+      meters.push(['cache', left <= 0 ? 'yellow' : 'cyan', left <= 0 ? 0 : (left / ttl) * 100, left <= 0 ? 'cold' : `${clock(left)} left`])
+    }
+    // Fresh enough to highlight: only the newest of a list, so one timer at most per list.
+    const isFresh = (at: number) => fx && now - at >= 0 && now - at < FLASH_WINDOW_MS
+    const hasPending = !!s.pending || list.length > 0
+    const bars = fx && width >= 48
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -789,39 +914,42 @@ export const register: Register = on => {
             {paused ? '⏸ Paused' : m === 'auto' ? '▶ Auto' : '✎ Draft'}
             <Text dimColor> · answered {s.autoCount} of {ctx.orders.maxAuto}</Text>
           </Text>
-          <Box>
+          <Box gap={1}>
             <Button key="mode" label={m === 'auto' ? 'Draft' : 'Auto'} onPress={() => setMode($, m === 'auto' ? 'draft' : 'auto')} />
-            <Text> </Text>
             <Button key="pause" label={paused ? '▶ Resume' : '⏸ Pause'} onPress={() => setPaused($, !paused)} />
           </Box>
         </Box>
 
-        <Box flexDirection="column">
-          {heading('Effort', 'magenta')}
-          {ev.isJudging ? <Text dimColor>deciding…</Text> : ev.level ? (
+        {card(
+          'effort', 'Effort', 'magenta',
+          ev.isJudging ? (
+            fx ? <Client key="judging" module="./motion.tsx" props={{ kind: 'spinner', label: 'deciding' }} /> : <Text dimColor>deciding…</Text>
+          ) : ev.level ? (
             <Box>
               <Text bold color={EFFORT_COLOR[ev.level]}>{ev.model ? `${cap(ev.model)} · ` : ''}{cap(ev.level)}</Text>
               <Box marginLeft={1} flexShrink={1}>
                 <Text dimColor>{!ev.isAuto ? '· set by you' : ev.why && ev.why !== 'auto' ? `· ${ev.why}` : ''}{ev.isSaving ? ' · capped by usage' : ''}</Text>
               </Box>
             </Box>
-          ) : <Text dimColor>Picked with your next prompt.</Text>}
-        </Box>
+          ) : <Text dimColor>Picked with your next prompt.</Text>,
+        )}
 
-        {s.pending || list.length > 0 ? (
+        {hasPending ? card(
+          'needs', `Needs you · ${(s.pending ? 1 : 0) + list.length}`, 'yellow',
           <Box flexDirection="column">
-            <Box justifyContent="space-between">
-              {heading(`Needs you · ${(s.pending ? 1 : 0) + list.length}`, 'yellow')}
-              {list.length > 1 && <Button key="clear" label="Clear all" onPress={() => setChecks($, () => [])} />}
-            </Box>
-            {s.pending && <Text color="yellow" bold>? {fit(s.pending, width - 2)}</Text>}
-            {shown.map(c => {
+            {s.pending && <Text color="yellow" bold>? {fit(s.pending, width - 6)}</Text>}
+            {shown.map((c, i) => {
               const id = `${c.at}:${c.text}`
+              const body = `${c.text} · ${checkAge(v.now - c.at)}`
               return (
-                <Box key={`check${id}`}>
-                  <Button key={`tick${id}`} label="✓ Done" onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
-                  <Box marginLeft={1} flexShrink={1}>
-                    <Text>{c.text} <Text dimColor>· {checkAge(v.now - c.at)}</Text></Text>
+                <Box key={`check${id}`} gap={1}>
+                  <Button key={`tick${id}`} label="✓ Done" hover={{ scope: `done-${id}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
+                  <Box flexShrink={1}>
+                    {i === 0 && isFresh(c.at) ? (
+                      <Client key={`flash-check-${c.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: '', body }} />
+                    ) : (
+                      <Text>{c.text} <Text dimColor>· {checkAge(v.now - c.at)}</Text></Text>
+                    )}
                   </Box>
                 </Box>
               )
@@ -829,42 +957,59 @@ export const register: Register = on => {
             {list.length > SHOWN_CHECKS && (
               <Button key="older" label={isOpen ? 'Show fewer' : `+${list.length - SHOWN_CHECKS} older`} onPress={() => update($, isChecksOpen, o => !o)} />
             )}
-          </Box>
+          </Box>,
+          { hot: true, right: list.length > 1 ? <Button key="clear" label="Clear all" onPress={() => setChecks($, () => [])} /> : undefined },
         ) : (
           <Text color="green">✓ Nothing needs you</Text>
         )}
 
-        <Box flexDirection="column">
-          {heading('Activity', 'blue')}
-          {recent.length > 0
-            ? recent.map((l, i) => (
-                <Box key={`log${i}`}>
-                  <Text dimColor>{logHead(l, v.now)} </Text>
-                  <Box flexShrink={1}>
-                    <Text dimColor={isPick(l.kind)}>{logBody(l)}</Text>
-                  </Box>
-                </Box>
-              ))
-            : <Text dimColor>Nothing yet. Decisions and picks show up here.</Text>}
-          {(Object.keys(tl.effort).length > 0 || Object.keys(tl.models).length > 0 || tl.subagents > 0) && (
-            <Text dimColor>
-              this session ·{Object.entries(tl.effort).map(([k, n]) => ` ${k} ×${n}`).join('')}
-              {Object.keys(tl.models).length > 0 ? ` · models${Object.entries(tl.models).map(([k, n]) => ` ${k} ×${n}`).join('')}` : ''}
-              {tl.subagents > 0 ? ` · ${tl.subagents} subagents steered` : ''}
-            </Text>
-          )}
-        </Box>
-
-        {meters.length > 0 && (
-          <Box>
-            {meters.map(([k, color, text], i) => (
-              <Box key={k}>
-                {i > 0 && <Text dimColor> · </Text>}
-                <Text color={color}>{text}</Text>
-              </Box>
-            ))}
-          </Box>
+        {card(
+          'activity', 'Activity', 'blue',
+          <Box flexDirection="column">
+            {recent.length > 0
+              ? recent.map((l, i) =>
+                  i === 0 && isFresh(l.at) ? (
+                    <Client key={`flash-log-${l.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: logHead(l, now), body: logBody(l), dim: isPick(l.kind) }} />
+                  ) : (
+                    <Box key={`log${i}`}>
+                      <Text dimColor>{logHead(l, v.now)} </Text>
+                      <Box flexShrink={1}>
+                        <Text dimColor={isPick(l.kind)}>{logBody(l)}</Text>
+                      </Box>
+                    </Box>
+                  ),
+                )
+              : <Text dimColor>Nothing yet. Decisions and picks show up here.</Text>}
+            {(Object.keys(tl.effort).length > 0 || Object.keys(tl.models).length > 0 || tl.subagents > 0) && (
+              <Text dimColor>
+                this session ·{Object.entries(tl.effort).map(([k, n]) => ` ${k} ×${n}`).join('')}
+                {Object.keys(tl.models).length > 0 ? ` · models${Object.entries(tl.models).map(([k, n]) => ` ${k} ×${n}`).join('')}` : ''}
+                {tl.subagents > 0 ? ` · ${tl.subagents} subagents steered` : ''}
+              </Text>
+            )}
+          </Box>,
         )}
+
+        {meters.length > 0 &&
+          (bars ? (
+            card(
+              'usage', 'Usage', 'cyan',
+              <Box flexDirection="column">
+                {meters.map(([name, color, percent, text]) => (
+                  <Client key={`bar-${name}`} module="./motion.tsx" props={{ kind: 'bar', name: name.padEnd(5), percent, color, width: Math.min(24, width - 28), text }} />
+                ))}
+              </Box>,
+            )
+          ) : (
+            <Box>
+              {meters.map(([name, color, , text], i) => (
+                <Box key={name}>
+                  {i > 0 && <Text dimColor> · </Text>}
+                  <Text color={color}>{name} {text}</Text>
+                </Box>
+              ))}
+            </Box>
+          ))}
       </Box>
     )
   })

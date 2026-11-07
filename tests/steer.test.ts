@@ -46,9 +46,10 @@ function engine(on: any, orders: string): Seen {
 const settle = async () => {
   for (let i = 0; i < 100; i++) await new Promise(r => setTimeout(() => r(undefined), 0))
 }
+// desktop on purpose: on the terminal the newest Activity entry sits inside a flash Client, which a plain Text find cannot see.
 const PANE = {
   plugin: 'standing-orders',
-  surface: 'terminal',
+  surface: 'desktop',
   component: 'Pane',
   requestId: 'autopilot',
   props: { title: 'Autopilot', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },

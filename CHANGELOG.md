@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.0 (unreleased)
+- Calm motion on the terminal, only while something happens: a spinner with a shimmering label while the effort is picked (status line and Effort card), usage bars that ease to a new value, and a short highlight on the newest Needs you / Activity entry. Nothing animates at rest; desktop shows plain text. Settings → Motion turns it off (`motion: off`).
+- The pane's sections are bordered cards that light up under the pointer (yellow when something needs you); the tab strip underlines the active tab; buttons light on hover. The footer line became Usage bars (a text line in a narrow pane).
+- Settings now covers everything: which models a new chat may pick, answers in a row (`max-auto`), your always-ask words (remove or add), which parts the status line shows (`band:`, now with an optional `limit` part), and the prompt-cache window (`cache-ttl`).
+
 ## 0.9.2
 - The Now tab has an Effort block: the level the mod picked for your prompt and why (or "set by you", or "capped by usage"). Settings no longer carry it.
 - The band above the prompt and the Now tab show the model the chat runs on next to the effort (`Opus · High`), including a model the mod picked for a new chat.
