@@ -824,26 +824,16 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" gap={1}>
           {tabs}
-          {control('effort', '◆', 'Effort', ev.level ? EFFORT_COLOR[ev.level] ?? 'magenta' : 'magenta',
-            `${!ev.isAuto ? 'yours' : mine.effortFixed ? `${mine.effortFixed} (fixed)` : `auto ${mine.effortMin}–${mine.effortMax}`}`,
-            'auto picks low to xhigh thinking for every prompt you type; a level fixes it; off leaves /effort to you.',
-            <Button key="effort" label={`⟳ ${ev.isAuto ? choice : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />,
-            choice === 'auto' && (
-              <Box flexShrink={0} gap={1}>
-                <Text dimColor>Range</Text>
-                <Button key="floor" label={`floor ${mine.effortMin}${mine.effortMin === 'low' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-min': cycleOf(ctx.mine.effortMin, ['low', 'medium', 'high']) })} />
-                <Button key="ceiling" label={`ceiling ${mine.effortMax}${mine.effortMax === 'xhigh' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-max': cycleOf(ctx.mine.effortMax, ['medium', 'high', 'xhigh', 'max']) })} />
-                <Button key="reset" label="reset" onPress={() => writeSetting($, { 'effort-min': 'low', 'effort-max': 'xhigh' })} />
-              </Box>
+{!v.hasRepoOrders && control('repo', '◈', 'Repo orders missing', 'yellow', 'none yet',
+            'Without them the autopilot only knows your global rules. Claude writes .claude/standing-orders.md from this repo: how to verify work, what to ask first.',
+            (
+              <Button key="init" label="Write them" onPress={() => {
+                startInit($)
+                $.ui.toast(`Asking Claude to write ${REPO_ORDERS} for this repo.`)
+              }} />
             ))}
-          {control('chats', '◇', 'New chats', 'blue', mine.isModelAuto ? `auto · ${mine.models.join(' / ')}` : 'your /model',
-            'Picks the model from your first message, only while the chat is empty (cache-safe). Choose which models it may use.',
-            onOff(mine.isModelAuto, 'model'),
-            mine.isModelAuto && chips('model', MODEL_NAMES, mine.models, next => void writeSetting($, { models: next.join(', ') }), true))}
-          {control('subagents', '◇', 'Subagents', 'cyan', mine.isSubagentsAuto ? 'auto · model + effort per task' : 'inherit the chat',
-            'Picks a model (Haiku for mechanical work) and effort for each helper from its task. Anything you named wins.',
-            onOff(mine.isSubagentsAuto, 'subagents'))}
-          {card(
+          <Box flexDirection="column"><Text bold dimColor>HOW IT ANSWERS</Text><Text dimColor>What the autopilot may do on its own.</Text></Box>
+{card(
             'replies', '✎ Replies', 'green',
             <Box flexDirection="column" gap={1}>
               <Box justifyContent="space-between">
@@ -862,7 +852,28 @@ export const register: Register = on => {
               <Input key={`term-add-${mine.terms.length}`} placeholder="add words, comma separated" submitLabel="add" onSubmit={addTerms} />
             </Box>,
           )}
-          {card(
+          {control('effort', '◆', 'Effort', ev.level ? EFFORT_COLOR[ev.level] ?? 'magenta' : 'magenta',
+            `${!ev.isAuto ? 'yours' : mine.effortFixed ? `${mine.effortFixed} (fixed)` : `auto ${mine.effortMin}–${mine.effortMax}`}`,
+            'auto picks low to xhigh thinking for every prompt you type; a level fixes it; off leaves /effort to you.',
+            <Button key="effort" label={`⟳ ${ev.isAuto ? choice : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />,
+            choice === 'auto' && (
+              <Box flexShrink={0} gap={1}>
+                <Text dimColor>Range</Text>
+                <Button key="floor" label={`floor ${mine.effortMin}${mine.effortMin === 'low' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-min': cycleOf(ctx.mine.effortMin, ['low', 'medium', 'high']) })} />
+                <Button key="ceiling" label={`ceiling ${mine.effortMax}${mine.effortMax === 'xhigh' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-max': cycleOf(ctx.mine.effortMax, ['medium', 'high', 'xhigh', 'max']) })} />
+                <Button key="reset" label="reset" onPress={() => writeSetting($, { 'effort-min': 'low', 'effort-max': 'xhigh' })} />
+              </Box>
+            ))}
+                    <Box flexDirection="column"><Text bold dimColor>MODELS</Text><Text dimColor>Which model and effort each chat and helper gets.</Text></Box>
+{control('chats', '◇', 'New chats', 'blue', mine.isModelAuto ? `auto · ${mine.models.join(' / ')}` : 'your /model',
+            'Picks the model from your first message, only while the chat is empty (cache-safe). Choose which models it may use.',
+            onOff(mine.isModelAuto, 'model'),
+            mine.isModelAuto && chips('model', MODEL_NAMES, mine.models, next => void writeSetting($, { models: next.join(', ') }), true))}
+          {control('subagents', '◇', 'Subagents', 'cyan', mine.isSubagentsAuto ? 'auto · model + effort per task' : 'inherit the chat',
+            'Picks a model (Haiku for mechanical work) and effort for each helper from its task. Anything you named wins.',
+            onOff(mine.isSubagentsAuto, 'subagents'))}
+                    <Box flexDirection="column"><Text bold dimColor>DISPLAY</Text><Text dimColor>What you see above the prompt and in this pane.</Text></Box>
+{card(
             'band', '▤ Status line', 'yellow',
             <Box flexDirection="column" gap={1}>
               <Text dimColor>What the line above the prompt shows:</Text>
@@ -876,7 +887,7 @@ export const register: Register = on => {
           {control('motion', '✦', 'Motion', 'magenta', mine.isMotionOn ? 'on · only while something happens' : 'off · static text',
             'A spinner while effort is picked, bars that ease, a highlight on new entries. Nothing moves at rest.',
             <Button key="motion" label={mine.isMotionOn ? 'Turn off' : 'Turn on'} onPress={() => writeSetting($, { motion: mine.isMotionOn ? 'off' : 'on' })} />)}
-          {control('repo', '◈', 'Repo orders', 'yellow', v.hasRepoOrders ? 'found' : 'none',
+          {v.hasRepoOrders && control('repo', '◈', 'Repo orders', 'yellow', v.hasRepoOrders ? 'found' : 'none',
             'This repo\'s own .claude/standing-orders.md: how to verify work here, what to ask first.',
             v.hasRepoOrders ? null : (
               <Button key="init" label="Write them" onPress={() => {
