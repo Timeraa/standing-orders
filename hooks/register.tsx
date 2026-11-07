@@ -12,18 +12,14 @@ import {
   asked,
   fit,
   EFFORTS,
-  cap,
-  clock,
-  isPick,
-  logBody,
-  logHead,
   parseVerdict,
   MODEL_NAMES,
   type Effort,
 } from './judges'
-import { checkAge, checkLife, createChecks, shownChecks, type Host as ChecksHost } from './checks'
+import { checkAge, createChecks, type Host as ChecksHost } from './checks'
 import { BAND_ITEMS, createOrders, type BandItem, type FileStore, type Settings } from './orders'
 import { createPicks, type Host } from './picks'
+import { bandView, effortColor, paneView } from './view'
 
 const NAME = 'standing-orders'
 const PANE = 'autopilot'
@@ -71,8 +67,6 @@ const ctx = {
 
 // A turn this long that ends without a question still tells the person.
 const LONG_TURN_MS = 180_000
-// A new entry stays highlighted this long (the module's flash itself lasts under a second).
-const FLASH_WINDOW_MS = 1500
 const firstLine = (text: string) => text.trim().split('\n')[0]?.slice(0, 160) || 'Finished.'
 
 async function notifyLong($: EngineInterface, ms: number, text: string) {
@@ -262,10 +256,6 @@ async function tick($: EngineInterface) {
 
 // The next value in a cycle; a value outside it starts over.
 const cycleOf = <T,>(cur: T, list: readonly T[]) => list[(list.indexOf(cur) + 1) % list.length] as T
-// Meters run green, yellow, red; effort runs cool to hot.
-const heat = (percent: number) => (percent >= 90 ? 'red' : percent >= 70 ? 'yellow' : 'green')
-const EFFORT_COLOR: Record<string, string> = { low: 'green', medium: 'cyan', high: 'magenta', xhigh: 'red' }
-
 // Only the terminal's and the desktop's tables have a Client; it is drawn on the terminal alone (see `fx`).
 const clientOf = (ui: object) => (ui as { Client: any }).Client
 
@@ -481,24 +471,17 @@ export const register: Register = on => {
     // Motion only where a Client is drawn and the person has not turned it off.
     const fx = orders.get().isMotionOn && e.surface === 'terminal'
     const show = (i: BandItem) => orders.get().band.includes(i)
-
-    // Narrow bands get shorter words; whatever still does not fit wraps as whole parts.
-    const narrow = (e.props.bodyColumns ?? 100) < 80
-    const label = narrow ? (paused ? 'paused' : m === 'auto' ? 'auto' : 'draft') : paused ? 'Orders paused' : m === 'auto' ? 'Orders: auto' : 'Orders: draft'
-    const effortText = ev.level
-      ? `${ev.model ? `${cap(ev.model)}${narrow ? '·' : ' · '}` : ''}${cap(ev.level)}${ev.isAuto ? '' : narrow ? '*' : ' (yours)'}${ev.isSaving ? ' · save' : ''}`
-      : ''
-    const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
-    const isCold = left !== null && left <= 0
+    const view = bandView({ run: s, checks: list, isPaused: paused, mode: m, effort: ev, vitals: v }, { columns: e.props.bodyColumns })
+    const meter = (name: 'ctx' | 'limit' | 'cache') => view.meters.find(x => x.name === name)
 
     // What the line shows is the person's choice (Settings, Status line).
     const parts: [string, any][] = []
     if (show('mode')) {
-      parts.push(['mode', <Button key="mode" label={`${paused ? '⏸' : m === 'auto' ? '▶' : '✎'} ${label}`} onPress={() => cycle($)} />])
+      parts.push(['mode', <Button key="mode" label={view.mode.label} onPress={() => cycle($)} />])
     }
-    if (show('answered') && s.autoCount > 0) parts.push(['answered', <Text dimColor>answered {s.autoCount}</Text>])
+    if (show('answered') && view.answered > 0) parts.push(['answered', <Text dimColor>answered {view.answered}</Text>])
     if (show('effort')) {
-      if (ev.isJudging) {
+      if (view.effort.isJudging) {
         parts.push([
           'effort',
           fx ? (
@@ -510,22 +493,17 @@ export const register: Register = on => {
             <Text dimColor>effort: deciding</Text>
           ),
         ])
-      } else if (effortText !== '') {
-        parts.push(['effort', <Text color={ev.level ? EFFORT_COLOR[ev.level] : undefined}>{effortText}</Text>])
+      } else if (view.effort.text !== '') {
+        parts.push(['effort', <Text color={view.effort.color}>{view.effort.text}</Text>])
       }
     }
-    if (show('ctx') && v.contextPercent !== null) {
-      parts.push(['ctx', <Text color={heat(v.contextPercent)}>ctx {Math.round(v.contextPercent)}%</Text>])
+    for (const name of ['ctx', 'limit', 'cache'] as const) {
+      const x = meter(name)
+      if (show(name) && x) parts.push([name, <Text color={x.tone}>{x.label}</Text>])
     }
-    if (show('limit') && v.ratePercent !== null) {
-      parts.push(['limit', <Text color={heat(v.ratePercent)}>limit {Math.round(v.ratePercent)}%</Text>])
-    }
-    if (show('cache') && left !== null) {
-      parts.push(['cache', <Text color={isCold ? 'yellow' : 'cyan'}>{isCold ? 'cache cold' : `cache ${clock(left)}`}</Text>])
-    }
-    if (show('hint') && !v.hasRepoOrders) parts.push(['hint', <Text dimColor>{narrow ? 'no repo orders' : 'no repo orders: /orders init'}</Text>])
+    if (show('hint') && !v.hasRepoOrders) parts.push(['hint', <Text dimColor>{view.hint}</Text>])
     if (show('autopilot')) {
-      parts.push(['autopilot', <Button key="autopilot" label={list.length > 0 ? `Autopilot · ${list.length}${narrow ? '' : ' to do'}` : 'Autopilot'} onPress={() => openPane($)} />])
+      parts.push(['autopilot', <Button key="autopilot" label={view.autopilot} onPress={() => openPane($)} />])
     }
 
     return (
@@ -537,7 +515,13 @@ export const register: Register = on => {
             </Box>
           ))}
         </Box>
-        {s.pending && <Text color="yellow" bold>⚠ Needs you: {s.pending}</Text>}
+        {view.note && (
+          <Text wrap="truncate-end">
+            <Text color="yellow" bold>{view.note.label}</Text>
+            {view.note.text ? ` ${view.note.text}` : ''}
+            {view.note.more ? <Text dimColor> {view.note.more}</Text> : null}
+          </Text>
+        )}
       </Box>
     )
   })
@@ -552,7 +536,6 @@ export const register: Register = on => {
       $.clock.now(),
     ])
     // The pane body scrolls, so nothing here is squeezed to a height.
-    const width = Math.max(30, e.props.bodyColumns ?? 60)
     const fx = orders.get().isMotionOn && e.surface === 'terminal'
     const goTo = (to: 'now' | 'settings') => () => update($, tab, () => to)
     const tabBtn = (id: 'now' | 'settings', text: string) =>
@@ -668,7 +651,7 @@ export const register: Register = on => {
               <Input key={`term-add-${mine.terms.length}`} placeholder="add words, comma separated" submitLabel="add" onSubmit={addTerms} />
             </Box>,
           )}
-          {control('effort', '◆', 'Effort', ev.level ? EFFORT_COLOR[ev.level] ?? 'magenta' : 'magenta',
+          {control('effort', '◆', 'Effort', effortColor(ev.level) ?? 'magenta',
             `${!ev.isAuto ? 'yours' : mine.effortFixed ? `${mine.effortFixed} (fixed)` : `auto ${mine.effortMin}–${mine.effortMax}`}`,
             'auto picks low to xhigh thinking for every prompt you type; a level fixes it; off leaves /effort to you.',
             <Button key="effort" label={`⟳ ${ev.isAuto ? choice : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />,
@@ -719,82 +702,72 @@ export const register: Register = on => {
     }
 
     // ---- Now ---------------------------------------------------------------
-    const { groups, older } = shownChecks(list, isOpen)
-    const recent = [...entries].reverse().slice(0, 8)
-    const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
-    // [name, colour, percent, text]
-    const meters: [string, string, number, string][] = []
-    if (v.contextPercent !== null) meters.push(['ctx', heat(v.contextPercent), v.contextPercent, `${Math.round(v.contextPercent)}%`])
-    if (v.ratePercent !== null) meters.push(['limit', heat(v.ratePercent), v.ratePercent, `${Math.round(v.ratePercent)}%`])
-    if (left !== null) {
-      const ttl = v.cacheTtlMin * 60_000
-      meters.push(['cache', left <= 0 ? 'yellow' : 'cyan', left <= 0 ? 0 : (left / ttl) * 100, left <= 0 ? 'cold' : `${clock(left)} left`])
-    }
-    // Fresh enough to highlight: only the newest of a list, so one timer at most per list.
-    const isFresh = (at: number) => fx && now - at >= 0 && now - at < FLASH_WINDOW_MS
-    const hasPending = !!s.pending || list.length > 0
-    const bars = fx && width >= 48
+    const view = paneView(
+      { run: s, checks: list, isPaused: paused, mode: m, effort: ev, vitals: v, log: entries, counts: tl, isChecksOpen: isOpen },
+      { columns: e.props.bodyColumns, fx, now, maxAuto: orders.get().maxAuto },
+    )
+    const { mode: vm, needs, activity, usage } = view
 
     return (
       <Box flexDirection="column" gap={1}>
         {tabs}
         <Box justifyContent="space-between">
-          <Text bold color={paused ? 'yellow' : m === 'auto' ? 'green' : 'cyan'}>
-            {paused ? '⏸ Paused' : m === 'auto' ? '▶ Auto' : '✎ Draft'}
-            <Text dimColor> · answered {s.autoCount} of {orders.get().maxAuto}</Text>
+          <Text bold color={vm.tone}>
+            {vm.label}
+            <Text dimColor> · {vm.answered}</Text>
           </Text>
           <Box gap={1}>
-            <Button key="mode" label={m === 'auto' ? 'Draft' : 'Auto'} onPress={() => setMode($, m === 'auto' ? 'draft' : 'auto')} />
-            <Button key="pause" label={paused ? '▶ Resume' : '⏸ Pause'} onPress={() => setPaused($, !paused)} />
+            <Button key="mode" label={vm.toggleLabel} onPress={() => setMode($, vm.toggleTo)} />
+            <Button key="pause" label={vm.pauseLabel} onPress={() => setPaused($, !paused)} />
           </Box>
         </Box>
 
         {card(
           'effort', 'Effort', 'magenta',
-          ev.isJudging ? (
+          view.effort.kind === 'judging' ? (
             fx ? <Client key="judging" module="./motion.tsx" props={{ kind: 'spinner', label: 'deciding' }} /> : <Text dimColor>deciding…</Text>
-          ) : ev.level ? (
+          ) : view.effort.kind === 'level' ? (
             <Box flexDirection="column">
-              <Text bold color={EFFORT_COLOR[ev.level]}>{ev.model ? `${cap(ev.model)} · ` : ''}{cap(ev.level)}</Text>
-              {(!ev.isAuto || (ev.why && ev.why !== 'auto') || ev.isSaving) && (
-                <Text dimColor>{!ev.isAuto ? 'set by you' : ev.why && ev.why !== 'auto' ? ev.why : ''}{ev.isSaving ? `${ev.why && ev.why !== 'auto' ? ' · ' : ''}capped by usage` : ''}</Text>
-              )}
+              <Text bold color={view.effort.color}>{view.effort.title}</Text>
+              {view.effort.note !== null && <Text dimColor>{view.effort.note}</Text>}
             </Box>
           ) : <Text dimColor>Picked with your next prompt.</Text>,
         )}
 
-        {hasPending ? card(
-          'needs', `Needs you · ${(s.pending ? 1 : 0) + list.length}`, 'yellow',
+        {needs.hasAny ? card(
+          'needs', `Needs you · ${needs.count}`, 'yellow',
           <Box flexDirection="column">
-            {s.pending && (
+            {needs.pending && (
               <Box flexDirection="column">
-                <Text color="yellow" bold>? {fit(s.pending, width - 6)}</Text>
+                <Box>
+                  <Text color="yellow" bold>? </Text>
+                  <Box flexShrink={1}>
+                    <Text color="yellow" bold>{needs.pending}</Text>
+                  </Box>
+                </Box>
                 <Text dimColor>  Claude is waiting on this. Answer in the prompt.</Text>
               </Box>
             )}
-            {s.pending && groups.length > 0 && <Text dimColor>Only you can check:</Text>}
-            {groups.map((g, gi) => (
-              <Box key={`grp${gi}-${g.lead ?? ''}`} flexDirection="column" marginTop={gi > 0 || s.pending ? 1 : 0}>
+            {needs.pending && needs.groups.length > 0 && <Text dimColor>Only you can check:</Text>}
+            {needs.groups.map((g, gi) => (
+              <Box key={`grp${gi}-${g.lead ?? ''}`} flexDirection="column" marginTop={gi > 0 || needs.pending ? 1 : 0}>
                 {g.lead && (
                   <Box justifyContent="space-between">
                     <Text bold>{g.lead} <Text dimColor>· {g.items.length}</Text></Text>
                     <Button key={`all${gi}`} dimColor label="Done all" hover={{ scope: `all-${gi}`, color: 'green' }} onPress={() => needsYou.tickOffGroup(checkHost($), g)} />
                   </Box>
                 )}
-                {g.items.map(({ item: c, text }) => {
-                  const age = v.now - c.at
-                  const life = checkLife(age)
-                  const isNewest = c.slot === 0
+                {g.items.map(({ item: c, text, age, life, isFlash, flashBody }) => {
                   // a hover scope is unique per item: checks found in one turn share a timestamp, and a shared scope lights them together
                   const done = <Button key={`tick${c.id}`} label="✓ Done" /* a scope is capped at 64 characters and shared by equal strings: build it from the position, not text or time */ hover={{ scope: `done-${c.slot}`, color: 'green' }} onPress={() => needsYou.tickOff(checkHost($), c.id)} />
                   const ask = <Button key={`ask${c.id}`} dimColor label="↳ Ask" hover={{ scope: `ask-${c.slot}`, color: 'cyan' }} onPress={() => void $.prompt.fill({ text: `About this check: ${c.text}`, mode: 'replace' })} />
-                  const line = isNewest && isFresh(c.at) ? (
-                    <Client key={`flash-check-${c.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: '', body: `${text} · ${checkAge(age)}` }} />
+                  const line = isFlash ? (
+                    <Client key={`flash-check-${c.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: '', body: flashBody }} />
                   ) : (
-                    <Text>{text} <Text dimColor>· {checkAge(age)}</Text>{life ? <Text color="yellow"> · {life}</Text> : null}</Text>
+                    <Text>{text} <Text dimColor>· {age}</Text>{life ? <Text color="yellow"> · {life}</Text> : null}</Text>
                   )
                   // Wide: one row. Narrow: the text gets the full width, its buttons sit under it.
-                  return width >= 80 ? (
+                  return view.isWide ? (
                     <Box key={`check${c.id}`} gap={1} paddingLeft={g.lead ? 2 : 0}>
                       {done}
                       <Box flexShrink={1} flexGrow={1}>{line}</Box>
@@ -809,11 +782,11 @@ export const register: Register = on => {
                 })}
               </Box>
             ))}
-            {older > 0 && (
-              <Button key="older" label={isOpen ? 'Show fewer' : `+${older} older`} onPress={() => update($, isChecksOpen, o => !o)} />
+            {needs.older > 0 && (
+              <Button key="older" label={needs.olderLabel} onPress={() => update($, isChecksOpen, o => !o)} />
             )}
           </Box>,
-          { hot: true, right: list.length > 1 ? <Button key="clear" label="Clear all" onPress={() => needsYou.clear(checkHost($))} /> : undefined },
+          { hot: true, right: needs.canClearAll ? <Button key="clear" label="Clear all" onPress={() => needsYou.clear(checkHost($))} /> : undefined },
         ) : (
           <Text color="green">✓ Nothing needs you</Text>
         )}
@@ -821,50 +794,43 @@ export const register: Register = on => {
         {card(
           'activity', 'Activity', 'blue',
           <Box flexDirection="column">
-            {recent.length > 0
-              ? recent.map((l, i) =>
-                  i === 0 && isFresh(l.at) ? (
-                    <Client key={`flash-log-${l.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: logHead(l, now), body: logBody(l), dim: isPick(l.kind) }} />
+            {activity.rows.length > 0
+              ? activity.rows.map((l, i) =>
+                  l.isFlash ? (
+                    <Client key={`flash-log-${l.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: l.flashHead, body: l.body, dim: l.isPick }} />
                   ) : (
-                    <Box key={`log${i}`} gap={1} marginTop={width < 80 && i > 0 ? 1 : 0}>
-                      <Text dimColor>{logHead(l, v.now)}</Text>
+                    <Box key={`log${i}`} gap={1} marginTop={!view.isWide && i > 0 ? 1 : 0}>
+                      <Text dimColor>{l.head}</Text>
                       <Box flexShrink={1}>
-                        <Text dimColor={isPick(l.kind)}>{logBody(l)}</Text>
+                        <Text dimColor={l.isPick}>{l.body}</Text>
                       </Box>
                     </Box>
                   ),
                 )
               : <Text dimColor>Nothing yet. Decisions and picks show up here.</Text>}
-            {(Object.keys(tl.effort).length > 0 || Object.keys(tl.models).length > 0 || tl.subagents > 0) && (
-              <Text dimColor>
-                this session ·{Object.entries(tl.effort).map(([k, n]) => ` ${k} ×${n}`).join('')}
-                {Object.keys(tl.models).length > 0 ? ` · models${Object.entries(tl.models).map(([k, n]) => ` ${k} ×${n}`).join('')}` : ''}
-                {tl.subagents > 0 ? ` · ${tl.subagents} subagents steered` : ''}
-              </Text>
-            )}
+            {activity.tally && <Text dimColor>{activity.tally}</Text>}
           </Box>,
         )}
 
-        {meters.length > 0 &&
-          (bars ? (
-            card(
-              'usage', 'Usage', 'cyan',
-              <Box flexDirection="column">
-                {meters.map(([name, color, percent, text]) => (
-                  <Client key={`bar-${name}`} module="./motion.tsx" props={{ kind: 'bar', name: name.padEnd(5), percent, color, width: Math.min(24, width - 28), text }} />
-                ))}
-              </Box>,
-            )
-          ) : (
-            <Box>
-              {meters.map(([name, color, , text], i) => (
-                <Box key={name}>
-                  {i > 0 && <Text dimColor> · </Text>}
-                  <Text color={color}>{name} {text}</Text>
-                </Box>
+        {usage.kind === 'bars' ? (
+          card(
+            'usage', 'Usage', 'cyan',
+            <Box flexDirection="column">
+              {usage.meters.map(x => (
+                <Client key={`bar-${x.name}`} module="./motion.tsx" props={{ kind: 'bar', name: x.barName, percent: x.percent, color: x.tone, width: usage.barWidth, text: x.text }} />
               ))}
-            </Box>
-          ))}
+            </Box>,
+          )
+        ) : usage.kind === 'inline' ? (
+          <Box>
+            {usage.meters.map((x, i) => (
+              <Box key={x.name}>
+                {i > 0 && <Text dimColor> · </Text>}
+                <Text color={x.tone}>{x.name} {x.text}</Text>
+              </Box>
+            ))}
+          </Box>
+        ) : null}
       </Box>
     )
   })

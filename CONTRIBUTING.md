@@ -3,7 +3,7 @@
 Issues and PRs are welcome. Keep changes small and focused.
 
 1. Fork, then `claude plugin marketplace add /path/to/your/clone`.
-2. Make your change. Pure logic goes in `hooks/judges.ts` (the orders files: `hooks/orders.ts`; the Needs you checks: `hooks/checks.ts`) with a test in `tests/`; UI and commands in `hooks/register.tsx`.
+2. Make your change. Pure logic goes in `hooks/judges.ts` (the orders files: `hooks/orders.ts`; the Needs you checks: `hooks/checks.ts`; what the band and the pane say: `hooks/view.ts`) with a test in `tests/`; UI and commands in `hooks/register.tsx`.
 3. Run `claude plugin test .` and `claude plugin validate .`.
 4. Commit in [Conventional Commits](https://www.conventionalcommits.org/) style (`feat:`, `fix:`, `docs:`, `chore:`) and open a PR.
 

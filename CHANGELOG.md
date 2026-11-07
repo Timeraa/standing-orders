@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- The status line shows a waiting question on one line (`⚠ Needs you: first sentence… +2 more`) instead of wrapping the whole text; the Needs you card in the pane wraps the full question.
+- Internal: orders, effort/model picks, Needs you checks and the status/pane display logic each live in one module (`hooks/orders.ts`, `picks.ts`, `checks.ts`, `view.ts`); tests share one fake engine.
+
 ## 0.10.0
 - Calm motion on the terminal, only while something happens: a spinner with a shimmering label while the effort is picked (status line and Effort card), usage bars that ease to a new value, and a short highlight on the newest Needs you / Activity entry. Nothing animates at rest; desktop shows plain text. Settings → Motion turns it off (`motion: off`).
 - The pane's sections are bordered cards that light up under the pointer (yellow when something needs you); the tab strip underlines the active tab; buttons light on hover. The footer line became Usage bars (a text line in a narrow pane).
