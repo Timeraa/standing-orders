@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.10.0 (unreleased)
+## 0.10.0
 - Calm motion on the terminal, only while something happens: a spinner with a shimmering label while the effort is picked (status line and Effort card), usage bars that ease to a new value, and a short highlight on the newest Needs you / Activity entry. Nothing animates at rest; desktop shows plain text. Settings → Motion turns it off (`motion: off`).
 - The pane's sections are bordered cards that light up under the pointer (yellow when something needs you); the tab strip underlines the active tab; buttons light on hover. The footer line became Usage bars (a text line in a narrow pane).
 - Needs you is more useful: items that share a lead ("After /reload-plugins, …") sit under one heading with **Done all**; each item has **↳ Ask**, which puts it in your prompt box; the last day before an item drops says "drops in 5h"; the waiting question says where to answer.
