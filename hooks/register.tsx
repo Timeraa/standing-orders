@@ -943,7 +943,7 @@ export const register: Register = on => {
               const body = `${c.text} · ${checkAge(v.now - c.at)}`
               return (
                 <Box key={`check${id}`} gap={1}>
-                  <Button key={`tick${id}`} label="✓ Done" hover={{ scope: `done-${id}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
+                  <Button key={`tick${id}`} label="✓ Done" /* a hover scope is capped at 64 characters: never build one from text */ hover={{ scope: `done-${c.at}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
                   <Box flexShrink={1}>
                     {i === 0 && isFresh(c.at) ? (
                       <Client key={`flash-check-${c.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: '', body }} />
