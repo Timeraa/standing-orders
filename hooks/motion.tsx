@@ -115,8 +115,8 @@ export default function Motion(props: Props, surface: ClientSurface<State>) {
   }
   const lit = !s?.off
   return (
-    <Box>
-      {props.head ? <Text dimColor={!lit} inverse={lit}>{props.head} </Text> : null}
+    <Box gap={1}>
+      {props.head ? <Text dimColor={!lit} inverse={lit}>{props.head}</Text> : null}
       <Box flexShrink={1}>
         <Text bold={lit} dimColor={!lit && !!props.dim}>{props.body}</Text>
       </Box>

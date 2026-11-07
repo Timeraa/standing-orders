@@ -1013,8 +1013,8 @@ export const register: Register = on => {
                   i === 0 && isFresh(l.at) ? (
                     <Client key={`flash-log-${l.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: logHead(l, now), body: logBody(l), dim: isPick(l.kind) }} />
                   ) : (
-                    <Box key={`log${i}`}>
-                      <Text dimColor>{logHead(l, v.now)} </Text>
+                    <Box key={`log${i}`} gap={1} marginTop={width < 80 && i > 0 ? 1 : 0}>
+                      <Text dimColor>{logHead(l, v.now)}</Text>
                       <Box flexShrink={1}>
                         <Text dimColor={isPick(l.kind)}>{logBody(l)}</Text>
                       </Box>
