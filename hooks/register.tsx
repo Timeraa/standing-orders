@@ -718,12 +718,11 @@ export const register: Register = on => {
       // The person's own file, so a repo's orders are never written back into it.
       const mine = ctx.mine
       const choice = effortChoice()
-      const effortNow = ev.level ? ` · now ${cap(ev.level)}${ev.isAuto && ev.why && ev.why !== 'auto' ? ` (${ev.why})` : ''}` : ''
       const control = (icon: string, name: string, color: string, value: string, hint: string, buttons: any) => (
         <Box flexDirection="column">
           <Box justifyContent="space-between">
             <Box flexShrink={1}>
-              <Text color={color} bold>{icon} {name.padEnd(11)}</Text>
+              <Text color={color} bold>{icon} {name.padEnd(13)}</Text>
               <Text wrap="truncate-end">{value}</Text>
             </Box>
             <Box flexShrink={0}>{buttons}</Box>
@@ -738,12 +737,12 @@ export const register: Register = on => {
         <Box flexDirection="column" gap={1}>
           {tabs}
           {control('◆', 'Effort', ev.level ? EFFORT_COLOR[ev.level] ?? 'magenta' : 'magenta',
-            `${!ev.isAuto ? 'yours' : mine.effortFixed ? `${mine.effortFixed} (fixed)` : `auto ${mine.effortMin}–${mine.effortMax}`}${effortNow}`,
+            `${!ev.isAuto ? 'yours' : mine.effortFixed ? `${mine.effortFixed} (fixed)` : `auto ${mine.effortMin}–${mine.effortMax}`}`,
             'auto picks low to xhigh thinking for every prompt you type; a level fixes it; off leaves /effort to you.',
             <Button key="effort" label={`⟳ ${ev.isAuto ? choice : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />)}
           {choice === 'auto' && (
-            <Box>
-              <Text>  Range  </Text>
+            <Box flexShrink={0}>
+              <Text wrap="truncate-end">  Range  </Text>
               <Button key="floor" label={`floor ${mine.effortMin}${mine.effortMin === 'low' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-min': cycleOf(ctx.mine.effortMin, ['low', 'medium', 'high']) })} />
               <Text>  </Text>
               <Button key="ceiling" label={`ceiling ${mine.effortMax}${mine.effortMax === 'xhigh' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-max': cycleOf(ctx.mine.effortMax, ['medium', 'high', 'xhigh', 'max']) })} />
@@ -795,6 +794,18 @@ export const register: Register = on => {
             <Text> </Text>
             <Button key="pause" label={paused ? '▶ Resume' : '⏸ Pause'} onPress={() => setPaused($, !paused)} />
           </Box>
+        </Box>
+
+        <Box flexDirection="column">
+          {heading('Effort', 'magenta')}
+          {ev.isJudging ? <Text dimColor>deciding…</Text> : ev.level ? (
+            <Box>
+              <Text bold color={EFFORT_COLOR[ev.level]}>{cap(ev.level)}</Text>
+              <Box marginLeft={1} flexShrink={1}>
+                <Text dimColor>{!ev.isAuto ? '· set by you' : ev.why && ev.why !== 'auto' ? `· ${ev.why}` : ''}{ev.isSaving ? ' · capped by usage' : ''}</Text>
+              </Box>
+            </Box>
+          ) : <Text dimColor>Picked with your next prompt.</Text>}
         </Box>
 
         {s.pending || list.length > 0 ? (

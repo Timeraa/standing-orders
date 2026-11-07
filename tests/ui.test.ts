@@ -61,7 +61,7 @@ test('the band and the Autopilot pane draw: Now, then Settings, whose buttons wr
   const seed = async () => {
     await set('tab', 'now')
     await set('run', { autoCount: 2, startedAt: 0, pending: 'Deploy to production?', last: null })
-    await set('effort', { level: 'high', why: 'test', isAuto: true, isJudging: false, isSaving: false })
+    await set('effort', { level: 'high', why: 'multi-file refactor', isAuto: true, isJudging: false, isSaving: false })
     await set('vitals', { now: 600_000, contextPercent: 41, lastResponseAt: 100_000, cacheTtlMin: 60, ratePercent: 20, hasRepoOrders: false })
     // seven open: the pane shows the newest five and offers the rest
     await set('checks', [
@@ -123,6 +123,7 @@ test('the band and the Autopilot pane draw: Now, then Settings, whose buttons wr
       /asked you: Deploy/,
       /finished: Shipped/,
       /effort high · multi-file feature/,
+      /multi-file refactor/,
       /new chat → opus · hard debugging/,
       /subagent → haiku\/low · grep the repo/,
       /Ancient reply 1/,
