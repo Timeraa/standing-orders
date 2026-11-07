@@ -1,92 +1,47 @@
 import { expect, test } from 'claude-code/testing'
 
 import { capEffort, isFollowUp, parseOrders, takesEffort } from '../hooks/judges'
+import { PANE, engine, typed } from './support'
 
-declare const setTimeout: (fn: () => void, ms: number) => unknown
-
-type Seen = { efforts: unknown[]; judged: number }
-
-// Stands in for the engine; the effort judge answers `level`.
-function engine(on: any, level: string): Seen {
-  const seen: Seen = { efforts: [], judged: 0 }
-  on('command.register', () => ({ value: { command: 'orders' } }))
-  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('env.get', () => ({ value: '/home/t' }))
-  on('fs.read', () => ({ deny: 'missing' }))
-  on('fs.write', () => ({ value: undefined }))
-  on('store.get', () => ({ value: undefined }))
-  on('store.set', () => ({ value: undefined }))
-  on('clock.now', () => ({ value: 1000 }))
-  on('clock.sleep', () => ({ value: undefined }))
-  on('clock.every', () => ({ value: undefined }))
-  on('model.complete', (_: unknown, e: { system: string }) => {
-    if (String(e.system).includes('how hard')) seen.judged += 1
-    return { value: { isAnswered: true, text: JSON.stringify({ effort: level, why: 'test' }) } }
-  })
-  on('prompt.submit', (_: unknown, e: { text: string }) => ({ text: e.text }))
-  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
-  on('turn.step', async function* (_: unknown, e: { turnId: string; index: number; effort?: unknown }) {
-    seen.efforts.push(e.effort)
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
-  })
-  on('ui.toast', () => ({ value: undefined }))
-  return seen
-}
-
-// desktop on purpose: on the terminal the newest Activity entry sits inside a flash Client, which a plain Text find cannot see.
-const PANE = {
-  plugin: 'standing-orders',
-  surface: 'desktop',
-  component: 'Pane',
-  requestId: 'autopilot',
-  props: { title: 'Autopilot', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
-} as const
-const settle = async () => {
-  for (let i = 0; i < 100; i++) await new Promise(r => setTimeout(() => r(undefined), 0))
-}
-
-async function prompt($: any, text: string, model: string, base: string, turnId: string) {
-  await $.prompt.submit({ text, origin: { kind: 'composer' }, wait: false })
-  await settle()
-  await $.turn.start({ turnId, prompt: text })
-  const s = $.turn.step({ turnId, index: 0, model, effort: base, messageCount: 1 })
-  for await (const _ of s) void _
-  await s.result
+// The effort judge answers `level`; it was asked once per "how hard" system prompt.
+function engineWith(on: any, level: string) {
+  const t = engine(on, { judge: { effort: level, why: 'test' } })
+  return { ...t, judged: () => t.systems.filter(s => s.includes('how hard')).length }
 }
 
 test('a typed prompt runs at the judged effort; a go-ahead keeps it without asking', async ($: any, on: any) => {
-  const seen = engine(on, 'high')
+  const seen = engineWith(on, 'high')
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
 
-  await prompt($, 'Profile the sim tick and fix whatever is slow', 'claude-opus-5-5', 'medium', 't1')
+  await typed($, 'Profile the sim tick and fix whatever is slow', 't1', 'claude-opus-5-5', 'medium')
   expect(seen.efforts).toEqual(['high'])
-  expect(seen.judged).toBe(1)
+  expect(seen.judged()).toBe(1)
 
-  await prompt($, 'go ahead', 'claude-opus-5-5', 'medium', 't2')
+  await typed($, 'go ahead', 't2', 'claude-opus-5-5', 'medium')
   expect(seen.efforts).toEqual(['high', 'high'])
-  expect(seen.judged).toBe(1)
+  expect(seen.judged()).toBe(1)
 
   // the judged pick reaches the Activity feed once; the kept go-ahead adds nothing
-  const pane = await $.ui.mount(PANE)
+  const pane = await $.ui.mount(PANE('desktop'))
   await pane.press({ key: 'now' }) // a first run opens the pane on Settings
   expect((await pane.findAll({ type: 'Text', text: /effort high · test/ })).length).toBe(1)
   await pane.unmount()
 })
 
 test('a model where effort rewrites the cache is left alone', async ($: any, on: any) => {
-  const seen = engine(on, 'low')
+  const seen = engineWith(on, 'low')
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await prompt($, 'What does this function return?', 'claude-fable-5-1', 'high', 't1')
+  await typed($, 'What does this function return?', 't1', 'claude-fable-5-1', 'high')
 
   expect(seen.efforts).toEqual(['high'])
 })
 
 test('changing effort yourself turns auto off', async ($: any, on: any) => {
-  const seen = engine(on, 'low')
+  const seen = engineWith(on, 'low')
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await prompt($, 'Rename this variable everywhere', 'claude-opus-5-5', 'medium', 't1')
+  await typed($, 'Rename this variable everywhere', 't1', 'claude-opus-5-5', 'medium')
   // The person picked xhigh in the effort menu between prompts.
-  await prompt($, 'Now rework the scheduler', 'claude-opus-5-5', 'xhigh', 't2')
+  await typed($, 'Now rework the scheduler', 't2', 'claude-opus-5-5', 'xhigh')
 
   expect(seen.efforts).toEqual(['low', 'xhigh'])
 })

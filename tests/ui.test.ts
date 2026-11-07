@@ -1,61 +1,15 @@
-import { expect, mock, test } from 'claude-code/testing'
+import { expect, test } from 'claude-code/testing'
 
 import { DEFAULT_ORDERS, checkLife, fit, groupChecks, splitLead, isPick, logBody, logLine, parseBand, parseOrders, pickText, setSetting } from '../hooks/judges'
 import { barCells, ease, shimmerWindow } from '../hooks/motion'
+import { GLOBAL, PANE, REPO, engine, settle } from './support'
 
-declare const setTimeout: (fn: () => void, ms: number) => unknown
-const settle = async () => {
-  for (let i = 0; i < 100; i++) await new Promise(r => setTimeout(() => r(undefined), 0))
-}
-
-// Stands in for the session's state: what a test sets is what the pane reads, and what the plugin writes stays.
-function store(on: any) {
-  const values: Record<string, unknown> = {}
-  on('state.get', (_: unknown, e: { key: string }) =>
-    e.key in values ? { value: { value: values[e.key], version: 1 } } : { value: { value: undefined, version: 0 } },
-  )
-  on('state.set', (_: unknown, e: { key: string; value: unknown }) => {
-    values[e.key] = e.value
-    return { value: { isSet: true, version: 1 } }
-  })
-  return (key: string, value: unknown) => {
-    values[key] = value
-  }
-}
-const PANE = (surface: 'terminal' | 'desktop') =>
-  ({
-    plugin: 'standing-orders',
-    surface,
-    component: 'Pane',
-    requestId: 'autopilot',
-    props: { title: 'Autopilot', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
-  }) as const
+// Every engine here keeps the session's state in a plain map (`state: true`): what a test sets is what the pane reads, and what the plugin writes stays.
 
 // The status line and the Autopilot pane draw on every surface from what the
 // state holds, with nothing beneath the plugin.
 test('the band and the Autopilot pane draw: Now, then Settings, whose buttons write the file', async ($: any, on: any) => {
-  const clock = mock.clock(on)
-  const set = store(on)
-  let file = DEFAULT_ORDERS
-  const written: string[] = []
-  const submitted: string[] = []
-  on('command.register', () => ({ value: { command: 'orders' } }))
-  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('env.get', () => ({ value: '/home/t' }))
-  on('fs.read', (_: unknown, e: { path: string }) => (e.path === '/home/t/.claude/standing-orders.md' ? { value: file } : { deny: 'missing' }))
-  on('fs.write', (_: unknown, e: { text: string }) => {
-    file = e.text
-    written.push(e.text)
-    return { value: undefined }
-  })
-  on('store.get', () => ({ value: undefined }))
-  on('store.set', () => ({ value: undefined }))
-  on('agent.list', () => ({ value: [] }))
-  on('prompt.submit', (_: unknown, e: { text: string }) => {
-    submitted.push(e.text)
-    return { text: e.text }
-  })
-  on('ui.toast', () => ({ value: undefined }))
+  const { clock, set, written, submitted } = engine(on, { orders: DEFAULT_ORDERS, state: true })
 
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await settle()
@@ -229,15 +183,7 @@ test('the band and the Autopilot pane draw: Now, then Settings, whose buttons wr
 
 // A repo that has orders shows "found", with nothing to write.
 test('the Settings tab reports repo orders as found', async ($: any, on: any) => {
-  mock.clock(on)
-  const set = store(on)
-  on('command.register', () => ({ value: { command: 'orders' } }))
-  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('env.get', () => ({ value: '/home/t' }))
-  on('fs.read', () => ({ value: DEFAULT_ORDERS }))
-  on('fs.write', () => ({ value: undefined }))
-  on('store.get', () => ({ value: undefined }))
-  on('agent.list', () => ({ value: [] }))
+  const { set } = engine(on, { orders: DEFAULT_ORDERS, repoOrders: DEFAULT_ORDERS, state: true })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await settle()
   await set('tab', 'settings')
@@ -251,37 +197,33 @@ test('the Settings tab reports repo orders as found', async ($: any, on: any) =>
 // The 5-second refresh end to end: usage reaches the band and the footer, a
 // first run opens the Settings tab, and /autopilot (and its old name /crew) toggles the pane.
 test('the refresh fills the footer from usage; first run and /orders setup open Settings; /crew still opens the pane', async ($: any, on: any) => {
-  const set = store(on)
   let ran = 0
   let isOpen = false
   const opened: string[] = []
-  on('command.register', () => ({ value: { command: 'orders' } }))
-  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('env.get', () => ({ value: '/home/t' }))
-  on('fs.read', () => ({ deny: 'missing' }))
-  on('fs.write', () => ({ value: undefined }))
-  on('store.get', () => ({ value: undefined }))
-  on('clock.now', () => ({ value: 1000 }))
-  on('clock.every', () => ({ value: undefined }))
-  on('session.usage', () => ({
-    value: { startedAt: 0, context: { window: 200000, percent: 63 }, rateLimits: [{ kind: '5h', percentUsed: 90 }] },
-  }))
-  on('process.run', () => {
-    ran += 1
-    return { value: { exitCode: 0, stdout: '', stderr: '' } }
-  })
-  on('agent.list', () => ({
-    value: [{ id: 'a1', description: 'lane-icons', type: 'general-purpose', status: 'running' }],
-  }))
-  on('ui.panes', () => ({ value: isOpen ? [{ id: 'autopilot' }] : [] }))
-  on('ui.open', (_: unknown, e: { id: string }) => {
-    isOpen = true
-    opened.push(e.id)
-    return { value: { isPlaced: true } }
-  })
-  on('ui.close', () => {
-    isOpen = false
-    return { value: undefined }
+  const { set } = engine(on, {
+    state: true,
+    handlers: {
+      'session.usage': () => ({
+        value: { startedAt: 0, context: { window: 200000, percent: 63 }, rateLimits: [{ kind: '5h', percentUsed: 90 }] },
+      }),
+      'process.run': () => {
+        ran += 1
+        return { value: { exitCode: 0, stdout: '', stderr: '' } }
+      },
+      'agent.list': () => ({
+        value: [{ id: 'a1', description: 'lane-icons', type: 'general-purpose', status: 'running' }],
+      }),
+      'ui.panes': () => ({ value: isOpen ? [{ id: 'autopilot' }] : [] }),
+      'ui.open': (_, e) => {
+        isOpen = true
+        opened.push(e.id)
+        return { value: { isPlaced: true } }
+      },
+      'ui.close': () => {
+        isOpen = false
+        return { value: undefined }
+      },
+    },
   })
 
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
@@ -335,20 +277,11 @@ test('the refresh fills the footer from usage; first run and /orders setup open 
 
 // Orders written after the start (Claude writing the repo file, an edit) reach the pane without a prompt.
 test('a repo orders file that appears later is picked up by the refresh', async ($: any, on: any) => {
-  mock.clock(on)
-  const set = store(on)
-  let hasRepo = false
-  on('command.register', () => ({ value: { command: 'orders' } }))
-  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('env.get', () => ({ value: '/home/t' }))
-  on('fs.read', (_: unknown, e: { path: string }) =>
-    e.path.startsWith('/repo/') ? (hasRepo ? { value: 'always-ask: migrate' } : { deny: 'missing' }) : { value: DEFAULT_ORDERS },
-  )
-  on('fs.write', () => ({ value: undefined }))
-  on('store.get', () => ({ value: undefined }))
-  on('agent.list', () => ({ value: [] }))
-  on('ui.panes', () => ({ value: [] }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  const { set, fs } = engine(on, {
+    orders: DEFAULT_ORDERS,
+    state: true,
+    handlers: { 'ui.open': () => ({ value: { isPlaced: true } }) },
+  })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await settle()
   await set('tab', 'settings')
@@ -356,7 +289,7 @@ test('a repo orders file that appears later is picked up by the refresh', async 
   expect(await before.find({ type: 'Button', key: 'init' })).toBeTruthy()
   await before.unmount()
 
-  hasRepo = true
+  fs[REPO] = 'always-ask: migrate'
   await $.command.run({ command: 'autopilot', args: '' }) // runs the refresh
   await settle()
   const after = await $.ui.mount(PANE('terminal'))
@@ -378,19 +311,7 @@ test('log lines: decisions read with a colon, picks read as a sentence', () => {
 
 // A new entry flashes on the terminal and nowhere else; an old one, or motion turned off, is plain.
 test('only the newest, fresh Activity entry is wrapped in the flash; motion: off and other surfaces are static', async ($: any, on: any) => {
-  const clock = mock.clock(on)
-  const set = store(on)
-  let file = DEFAULT_ORDERS
-  on('command.register', () => ({ value: { command: 'orders' } }))
-  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('env.get', () => ({ value: '/home/t' }))
-  on('fs.read', (_: unknown, e: { path: string }) => (e.path.startsWith('/repo/') ? { deny: 'missing' } : { value: file }))
-  on('fs.write', (_: unknown, e: { text: string }) => {
-    file = e.text
-    return { value: undefined }
-  })
-  on('store.get', () => ({ value: undefined }))
-  on('agent.list', () => ({ value: [] }))
+  const { clock, set } = engine(on, { orders: DEFAULT_ORDERS, state: true })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await settle()
   await clock.advance(1_000_000)
@@ -423,21 +344,7 @@ test('only the newest, fresh Activity entry is wrapped in the flash; motion: off
 
 // Every setting has a control in Settings and every click saves to the file.
 test('Settings customize the status line, replies, models, cache and motion', async ($: any, on: any) => {
-  mock.clock(on)
-  const set = store(on)
-  let file = DEFAULT_ORDERS
-  const written: string[] = []
-  on('command.register', () => ({ value: { command: 'orders' } }))
-  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('env.get', () => ({ value: '/home/t' }))
-  on('fs.read', (_: unknown, e: { path: string }) => (e.path.startsWith('/repo/') ? { deny: 'missing' } : { value: file }))
-  on('fs.write', (_: unknown, e: { text: string }) => {
-    file = e.text
-    written.push(e.text)
-    return { value: undefined }
-  })
-  on('store.get', () => ({ value: undefined }))
-  on('agent.list', () => ({ value: [] }))
+  const { set, fs, written } = engine(on, { orders: DEFAULT_ORDERS, state: true })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await settle()
   await set('tab', 'settings')
@@ -467,7 +374,7 @@ test('Settings customize the status line, replies, models, cache and motion', as
   await press('band-autopilot')
   await press('band-ctx')
   await press('band-limit')
-  expect(parseOrders(file).band).toEqual(parseBand(undefined))
+  expect(parseOrders(fs[GLOBAL]).band).toEqual(parseBand(undefined))
 
   // replies: the cap, then the always-ask words
   await press('maxauto-inc')
@@ -478,28 +385,28 @@ test('Settings customize the status line, replies, models, cache and motion', as
   await pane.input({ key: `term-add-${parseOrders(DEFAULT_ORDERS).terms.length}`, text: 'migrate, publish' })
   await pane.unmount()
   pane = await $.ui.mount(PANE('terminal'))
-  expect(parseOrders(file).terms).toContain('migrate')
-  expect(parseOrders(file).terms).toContain('publish')
+  expect(parseOrders(fs[GLOBAL]).terms).toContain('migrate')
+  expect(parseOrders(fs[GLOBAL]).terms).toContain('publish')
   await press('term-migrate')
-  expect(parseOrders(file).terms).not.toContain('migrate')
-  expect(parseOrders(file).terms).toContain('publish')
-  expect(file.match(/^always-ask:/gm)?.length).toBe(1)
+  expect(parseOrders(fs[GLOBAL]).terms).not.toContain('migrate')
+  expect(parseOrders(fs[GLOBAL]).terms).toContain('publish')
+  expect(fs[GLOBAL].match(/^always-ask:/gm)?.length).toBe(1)
 
   // models a new chat may pick from: never an empty list
   await press('model-fable')
-  expect(parseOrders(file).models).toEqual(['sonnet', 'opus', 'fable'])
+  expect(parseOrders(fs[GLOBAL]).models).toEqual(['sonnet', 'opus', 'fable'])
   await press('model-sonnet')
   await press('model-opus')
   await press('model-fable')
-  expect(parseOrders(file).models).toEqual(['fable'])
+  expect(parseOrders(fs[GLOBAL]).models).toEqual(['fable'])
   await press('model-fable') // the last one stays
-  expect(parseOrders(file).models).toEqual(['fable'])
+  expect(parseOrders(fs[GLOBAL]).models).toEqual(['fable'])
 
   // the prompt cache window and motion
   await press('ttl')
-  expect(parseOrders(file).cacheTtlMin).toBe(5)
+  expect(parseOrders(fs[GLOBAL]).cacheTtlMin).toBe(5)
   await press('motion')
-  expect(parseOrders(file).isMotionOn).toBe(false)
+  expect(parseOrders(fs[GLOBAL]).isMotionOn).toBe(false)
   await set('tab', 'now')
   await set('effort', { level: 'high', why: 'x', isAuto: true, isJudging: true, isSaving: false })
   await pane.unmount()
@@ -545,21 +452,7 @@ test('band setting: the default, a custom list, and none', () => {
 })
 
 test('Needs you groups items that share a lead, with Done all, Ask and a heads-up before an item drops', async ($: any, on: any) => {
-  const clock = mock.clock(on, { now: 10 * 86_400_000 })
-  const set = store(on)
-  const filled: string[] = []
-  on('command.register', () => ({ value: { command: 'orders' } }))
-  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('env.get', () => ({ value: '/home/t' }))
-  on('fs.read', () => ({ value: DEFAULT_ORDERS }))
-  on('fs.write', () => ({ value: undefined }))
-  on('store.get', () => ({ value: undefined }))
-  on('store.set', () => ({ value: undefined }))
-  on('agent.list', () => ({ value: [] }))
-  on('prompt.fill', (_: unknown, e: { text: string }) => {
-    filled.push(e.text)
-    return { isFilled: true }
-  })
+  const { clock, set, filled } = engine(on, { now: 10 * 86_400_000, orders: DEFAULT_ORDERS, repoOrders: DEFAULT_ORDERS, state: true })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await settle()
   const now = clock.now()
@@ -605,15 +498,7 @@ test('check grouping and expiry helpers', () => {
 
 // The band reads its width: short words when narrow, and parts wrap whole instead of breaking mid-label.
 test('the band shortens its words in a narrow column', async ($: any, on: any) => {
-  mock.clock(on)
-  const set = store(on)
-  on('command.register', () => ({ value: { command: 'orders' } }))
-  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('env.get', () => ({ value: '/home/t' }))
-  on('fs.read', () => ({ value: DEFAULT_ORDERS }))
-  on('fs.write', () => ({ value: undefined }))
-  on('store.get', () => ({ value: undefined }))
-  on('agent.list', () => ({ value: [] }))
+  const { set } = engine(on, { orders: DEFAULT_ORDERS, repoOrders: DEFAULT_ORDERS, state: true })
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
   await settle()
   await set('effort', { level: 'high', model: 'sonnet', why: '', isAuto: true, isJudging: false, isSaving: false })

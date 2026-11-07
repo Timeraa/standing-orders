@@ -1,66 +1,25 @@
 import { expect, test } from 'claude-code/testing'
 
 import { parseModel, parseModels, parseOrders, setSetting } from '../hooks/judges'
+import { PANE, engine, typed } from './support'
 
-declare const setTimeout: (fn: () => void, ms: number) => unknown
-
-function engine(on: any, orders: string) {
-  const seen = { models: [] as string[], judged: 0 }
-  on('command.register', () => ({ value: { command: 'orders' } }))
-  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('env.get', () => ({ value: '/home/t' }))
-  on('fs.read', () => ({ value: orders }))
-  on('fs.write', () => ({ value: undefined }))
-  on('store.get', () => ({ value: undefined }))
-  on('store.set', () => ({ value: undefined }))
-  on('clock.now', () => ({ value: 1000 }))
-  on('clock.sleep', () => ({ value: undefined }))
-  on('clock.every', () => ({ value: undefined }))
-  on('model.complete', (_: unknown, e: { system: string }) => {
-    if (String(e.system).includes('NEW chat')) seen.judged += 1
-    return { value: { isAnswered: true, text: JSON.stringify({ model: 'opus', effort: 'low', why: 'hard' }) } }
-  })
-  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
-  on('turn.step', async function* (_: unknown, e: { turnId: string; index: number; model: string }) {
-    seen.models.push(e.model)
-    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
-  })
-  on('prompt.submit', (_: unknown, e: { text: string }) => ({ text: e.text }))
-  on('ui.toast', () => ({ value: undefined }))
-  on('ui.open', () => ({ value: undefined }))
-  return seen
-}
-
-const PANE = {
-  plugin: 'standing-orders',
-  surface: 'terminal',
-  component: 'Pane',
-  requestId: 'autopilot',
-  props: { title: 'Autopilot', isFocused: false, bodyColumns: 80, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
-} as const
-const settle = async () => {
-  for (let i = 0; i < 100; i++) await new Promise(r => setTimeout(() => r(undefined), 0))
-}
-const type = async ($: any, text: string, model: string, turnId: string) => {
-  await $.prompt.submit({ text, origin: { kind: 'composer' }, wait: false })
-  await settle()
-  await $.turn.start({ turnId, prompt: text })
-  const s = $.turn.step({ turnId, index: 0, model, effort: 'medium', messageCount: 1 })
-  for await (const _ of s) void _
-  await s.result
+// The orders answer every file read, the repo's too. The judge always picks Opus.
+const engineWith = (on: any, orders: string) => {
+  const t = engine(on, { orders, repoOrders: orders, judge: { model: 'opus', effort: 'low', why: 'hard' } })
+  return { ...t, judged: () => t.systems.filter(s => s.includes('NEW chat')).length }
 }
 
 test('a new chat picks its model once, from the first prompt', async ($: any, on: any) => {
-  const seen = engine(on, 'model: auto\nmodels: sonnet, opus\n')
+  const seen = engineWith(on, 'model: auto\nmodels: sonnet, opus\n')
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await type($, 'Rework the scheduler and fix the deadlock', 'claude-sonnet-5-5', 't1')
-  await type($, 'Also rename the helper', 'claude-sonnet-5-5', 't2')
+  await typed($, 'Rework the scheduler and fix the deadlock', 't1', 'claude-sonnet-5-5')
+  await typed($, 'Also rename the helper', 't2', 'claude-sonnet-5-5')
   // The chat stays on the first pick; running /model yourself ends it.
-  await type($, 'Now something else', 'claude-haiku-5-5', 't3')
+  await typed($, 'Now something else', 't3', 'claude-haiku-5-5')
 
-  expect(seen.judged).toBe(1)
+  expect(seen.judged()).toBe(1)
   // the pick reaches the Activity feed, once
-  const pane = await $.ui.mount(PANE)
+  const pane = await $.ui.mount(PANE())
   expect((await pane.findAll({ type: 'Text', text: /new chat → opus · hard/ })).length).toBe(1)
   await pane.unmount()
   // Pinned by alias, so a newer Opus is picked up with no change here.
@@ -68,11 +27,11 @@ test('a new chat picks its model once, from the first prompt', async ($: any, on
 })
 
 test('model: off leaves the model alone', async ($: any, on: any) => {
-  const seen = engine(on, 'model: off\n')
+  const seen = engineWith(on, 'model: off\n')
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
-  await type($, 'Rework the scheduler and fix the deadlock', 'claude-sonnet-5-5', 't1')
+  await typed($, 'Rework the scheduler and fix the deadlock', 't1', 'claude-sonnet-5-5')
 
-  expect(seen.judged).toBe(0)
+  expect(seen.judged()).toBe(0)
   expect(seen.models).toEqual(['claude-sonnet-5-5'])
 })
 
