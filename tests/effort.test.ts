@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { capEffort, isFollowUp, parseOrders, takesEffort } from '../hooks/judges'
+import { capEffort, isFollowUp, takesEffort } from '../hooks/judges'
+import { parseOrders } from '../hooks/orders'
 import { PANE, engine, typed } from './support'
 
 // The effort judge answers `level`; it was asked once per "how hard" system prompt.

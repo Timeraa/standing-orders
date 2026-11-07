@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { parseModel, parseModels, parseOrders, setSetting } from '../hooks/judges'
+import { parseModel } from '../hooks/judges'
+import { parseModels, parseOrders, setSetting } from '../hooks/orders'
 import { PANE, engine, typed } from './support'
 
 // The orders answer every file read, the repo's too. The judge always picks Opus.

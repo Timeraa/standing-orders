@@ -1,6 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
-import { DEFAULT_ORDERS, checkLife, fit, groupChecks, splitLead, isPick, logBody, logLine, parseBand, parseOrders, pickText, setSetting } from '../hooks/judges'
+import { checkLife, fit, groupChecks, splitLead, isPick, logBody, logLine, pickText } from '../hooks/judges'
+import { DEFAULT_ORDERS, parseBand, parseOrders, setSetting } from '../hooks/orders'
 import { barCells, ease, shimmerWindow } from '../hooks/motion'
 import { GLOBAL, PANE, REPO, engine, settle } from './support'
 

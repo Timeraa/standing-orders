@@ -3,7 +3,6 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Check, Counts, EffortView, LogEntry, Run, Vitals } from '../types'
 import {
-  DEFAULT_ORDERS,
   HELP,
   INIT_PROMPT,
   REPO_ORDERS,
@@ -34,17 +33,14 @@ import {
   logHead,
   parseEffort,
   parseModel,
-  setSetting,
-  parseOrders,
   parseVerdict,
   pickText,
   takesEffort,
-  BAND_ITEMS,
   MODEL_NAMES,
-  type BandItem,
   type Effort,
   type ModelName,
 } from './judges'
+import { BAND_ITEMS, createOrders, type BandItem, type FileStore, type Settings } from './orders'
 
 const NAME = 'standing-orders'
 const PANE = 'autopilot'
@@ -77,15 +73,11 @@ const counts = atom({ plugin: 'standing-orders', key: 'counts' } as const, { eff
 const log = atom({ plugin: 'standing-orders', key: 'log' } as const, [] as LogEntry[])
 
 // ponytail: one session per process, so module-level context is enough.
+// The standing-orders files: orders.get() is what the mod obeys, orders.mine() the person's own file.
+const orders = createOrders()
+
 const ctx = {
-  orders: parseOrders(DEFAULT_ORDERS),
-  // The person's own file alone: what the Settings tab starts from.
-  mine: parseOrders(DEFAULT_ORDERS),
-  globalPath: '',
   cwd: '',
-  // The two files as last loaded (null: missing), so the refresh notices an edit or a new repo file.
-  globalText: null as string | null,
-  repoText: null as string | null,
   // ponytail: a chat is one load of the mod (a /clear or reload starts a new one); its items are replaced together.
   chat: '',
   turnStartedAt: 0,
@@ -98,7 +90,6 @@ const ctx = {
   lastApplied: undefined as unknown,
   isTicking: false,
   // model: chosen once, for a chat with no history
-  isFirstRun: false,
   isModelChecked: false,
   modelJob: null as Promise<{ model: ModelName; why: string } | null> | null,
   chatModel: null as { base: string; id: string } | null,
@@ -139,20 +130,19 @@ async function setEffortAuto($: EngineInterface, isAuto: boolean) {
 const tally = ($: EngineInterface, kind: 'effort' | 'models', key: string) =>
   update($, counts, c => ({ ...c, [kind]: { ...c[kind], [key]: (c[kind][key] ?? 0) + 1 } }))
 
+// The orders module's file store: the engine's `$.fs`, which can only be called, never passed.
+const files = ($: EngineInterface): FileStore => ({
+  read: path => $.fs.read(path),
+  write: (path, text) => $.fs.write(path, text),
+})
+
 // The settings file is the source of truth: buttons and commands write to it.
-async function writeSetting($: EngineInterface, pairs: Record<string, string>) {
-  let text: string
-  try {
-    text = await $.fs.read(ctx.globalPath)
-  } catch {
-    text = DEFAULT_ORDERS
-  }
-  for (const [k, v] of Object.entries(pairs)) text = setSetting(text, k, v, k === 'always-ask')
-  await $.fs.write(ctx.globalPath, text)
-  await loadOrders($)
+async function writeSetting($: EngineInterface, pairs: Settings) {
+  await orders.set(files($), pairs)
+  await applyOrders($)
 }
 const EFFORT_CHOICES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'off'] as const
-const effortChoice = () => (!ctx.mine.isEffortAuto ? 'off' : (ctx.mine.effortFixed ?? 'auto'))
+const effortChoice = () => (!orders.mine().isEffortAuto ? 'off' : (orders.mine().effortFixed ?? 'auto'))
 async function chooseEffort($: EngineInterface, choice: string) {
   await writeSetting($, { effort: choice })
   await setEffortAuto($, choice !== 'off')
@@ -180,27 +170,16 @@ const cycle = async ($: EngineInterface) => {
 
 // ---- orders -------------------------------------------------------------
 
-async function loadOrders($: EngineInterface) {
-  let text: string
-  try {
-    text = await $.fs.read(ctx.globalPath)
-  } catch {
-    text = DEFAULT_ORDERS
-    ctx.isFirstRun = true
-    await $.fs.write(ctx.globalPath, DEFAULT_ORDERS).catch(() => {})
-  }
-  let repo = ''
-  let hasRepoOrders = false
-  try {
-    repo = await $.fs.read(`${ctx.cwd}/${REPO_ORDERS}`)
-    hasRepoOrders = true
-  } catch {}
-  ctx.globalText = text
-  ctx.repoText = hasRepoOrders ? repo : null
-  ctx.orders = parseOrders(text, repo)
-  ctx.mine = parseOrders(text)
-  await update($, vitals, v => ({ ...v, hasRepoOrders, cacheTtlMin: ctx.orders.cacheTtlMin }))
-  if (!ctx.orders.isEffortAuto) await update($, effort, v => ({ ...v, isAuto: false }))
+// What a load of the orders changes elsewhere. Writing the vitals atom is also what
+// redraws the Settings tab after a click, so every load comes through here.
+async function applyOrders($: EngineInterface) {
+  await update($, vitals, v => ({ ...v, hasRepoOrders: orders.hasRepo(), cacheTtlMin: orders.get().cacheTtlMin }))
+  if (!orders.get().isEffortAuto) await update($, effort, v => ({ ...v, isAuto: false }))
+}
+
+// Re-reads the files; applies them when they changed (always, with `force`).
+async function reloadOrders($: EngineInterface, force = false) {
+  if (await orders.refresh(files($), force)) await applyOrders($)
 }
 
 async function addChecks($: EngineInterface, found: readonly unknown[] | undefined, resolved: readonly unknown[] | undefined) {
@@ -233,7 +212,7 @@ async function judge($: EngineInterface, answer: string, durationMs: number) {
   const r = await $.model.complete({
     model: 'haiku',
     system: JUDGE,
-    prompt: `STANDING ORDERS:\n${ctx.orders.text}\n\nOPEN CHECKS:\n${open.length ? open.map(c => `- ${c.text}`).join('\n') : '(none)'}\n\nEND OF THE AGENT'S MESSAGE:\n${tail}`,
+    prompt: `STANDING ORDERS:\n${orders.get().text}\n\nOPEN CHECKS:\n${open.length ? open.map(c => `- ${c.text}`).join('\n') : '(none)'}\n\nEND OF THE AGENT'S MESSAGE:\n${tail}`,
     maxTokens: 500,
     timeoutMs: 45000,
   })
@@ -257,10 +236,10 @@ async function judge($: EngineInterface, answer: string, durationMs: number) {
   if (v.action === 'ask') return wait($, v.decision || 'Claude is waiting on you.')
 
   // continue: a plain-code rail first, whatever the judge said.
-  const railed = ctx.orders.rail?.exec(`${v.reply ?? ''} ${asked(tail)}`)
+  const railed = orders.get().rail?.exec(`${v.reply ?? ''} ${asked(tail)}`)
   if (railed) return wait($, v.decision || `Claude asks about "${railed[0]}": your call.`)
   const isAuto = (await read($, mode)) === 'auto'
-  if (isAuto && state.autoCount >= ctx.orders.maxAuto) {
+  if (isAuto && state.autoCount >= orders.get().maxAuto) {
     return wait($, `${state.autoCount} standing answers this run. Check in.`)
   }
   if ((await $.prompt.read()).text.trim()) return // already typing a reply
@@ -299,7 +278,7 @@ async function pickEffort($: EngineInterface): Promise<void> {
   const picked = await Promise.race([job, timeout]).catch(() => null)
   const saving = (await read($, effort)).isSaving
   if (picked) {
-    const { effortMin, effortMax } = ctx.orders
+    const { effortMin, effortMax } = orders.get()
     const level = clampEffort(picked.effort, effortMin, saving ? capEffort(effortMax, 'medium') : effortMax)
     ctx.turnEffort = level
     await update($, effort, v => ({ ...v, why: picked.why, isJudging: false }))
@@ -312,7 +291,7 @@ async function pickEffort($: EngineInterface): Promise<void> {
 // ---- model: a new chat only ---------------------------------------------
 
 async function judgeModel($: EngineInterface, text: string) {
-  const { models } = ctx.orders
+  const { models } = orders.get()
   const r = await $.model.complete({
     model: 'haiku',
     system: MODEL_JUDGE,
@@ -357,11 +336,7 @@ async function tick($: EngineInterface) {
   await update($, effort, v => ({ ...v, isSaving: rate !== null && rate >= 85 }))
 
   // Orders written since the last load (by Claude, an editor, the Write them button) take effect now.
-  const [g, r] = await Promise.all([
-    $.fs.read(ctx.globalPath).catch(() => null),
-    $.fs.read(`${ctx.cwd}/${REPO_ORDERS}`).catch(() => null),
-  ])
-  if (r !== ctx.repoText || (g !== null && g !== ctx.globalText)) await loadOrders($)
+  await reloadOrders($)
 
   const open = await read($, checks)
   if (liveChecks(open, now).length !== open.length) await setChecks($, old => liveChecks(old, now))
@@ -395,8 +370,8 @@ export const register: Register = on => {
     await $.command.register({ name: 'autopilot', description: 'What needs you, what the orders did and picked, and the settings' })
     await $.command.register({ name: 'crew', description: 'Old name of /autopilot' })
     ctx.cwd = e.cwd
-    ctx.globalPath = `${(await $.env.get('HOME')) ?? ''}/.claude/standing-orders.md`
-    await loadOrders($)
+    orders.locate({ cwd: e.cwd, globalPath: `${(await $.env.get('HOME')) ?? ''}/.claude/standing-orders.md` })
+    await reloadOrders($, true)
     const startedAt = await $.clock.now()
     ctx.chat = String(startedAt)
     const saved = await $.store.get(`checks:${ctx.cwd}`).catch(() => null)
@@ -406,8 +381,7 @@ export const register: Register = on => {
       $.clock.every(5000, () => void tick($).catch(() => {}))
     }
     void tick($).catch(() => {})
-    if (ctx.isFirstRun) {
-      ctx.isFirstRun = false
+    if (orders.consumeFirstRun()) {
       await openPane($, 'settings').catch(() => {})
     }
 
@@ -422,7 +396,7 @@ export const register: Register = on => {
       // Only the chat's first prompt, only with no history, and never over a /model the person typed.
       ctx.isModelChecked = true
       const pct = (await read($, vitals)).contextPercent
-      if (ctx.orders.isModelAuto && !e.command && (pct === null || pct < 5) && !isFollowUp(e.text)) {
+      if (orders.get().isModelAuto && !e.command && (pct === null || pct < 5) && !isFollowUp(e.text)) {
         ctx.modelJob = judgeModel($, e.text)
       }
     }
@@ -441,13 +415,13 @@ export const register: Register = on => {
             : { ...IDLE, startedAt: ctx.composerAt },
         )
         if (isDraftSent) ctx.composerAt = 0
-        else await loadOrders($)
+        else await reloadOrders($, true)
 
         const ev = await read($, effort)
-        if (ev.isAuto && !ctx.orders.effortFixed && !isDraftSent && !isFollowUp(e.text)) {
+        if (ev.isAuto && !orders.get().effortFixed && !isDraftSent && !isFollowUp(e.text)) {
           ctx.effortJob = judgeEffort($, e.text)
           await update($, effort, v => ({ ...v, isJudging: true }))
-        } else if (ev.isAuto && ctx.orders.effortFixed) {
+        } else if (ev.isAuto && orders.get().effortFixed) {
           await update($, effort, v => ({ ...v, why: 'fixed' }))
         } else if (ev.isAuto) {
           await update($, effort, v => ({ ...v, why: 'kept for a follow-up' }))
@@ -487,10 +461,10 @@ export const register: Register = on => {
         ev = await update($, effort, v => ({ ...v, isAuto: false, isJudging: false, why: 'yours' }))
         $.ui.toast('You changed effort yourself: auto effort is off. /orders effort auto turns it back on.')
       }
-      if (ev.isAuto && !ctx.orders.effortFixed && takesEffort(model)) await pickEffort($)
+      if (ev.isAuto && !orders.get().effortFixed && takesEffort(model)) await pickEffort($)
     }
 
-    const level = ev.isAuto && takesEffort(model) ? (ctx.orders.effortFixed ?? ctx.turnEffort) : null
+    const level = ev.isAuto && takesEffort(model) ? (orders.get().effortFixed ?? ctx.turnEffort) : null
     if (level) ctx.lastApplied = level
     if (level && e.index === 0) void tally($, 'effort', level)
     await update($, effort, v => ({ ...v, model: shortModel(model), level: level ?? (e.effort === undefined ? null : String(e.effort)) }))
@@ -503,8 +477,8 @@ export const register: Register = on => {
 
   on('agent.spawn', async ($, e, next) => {
     const ev = e as unknown as { prompt: string; subagentType: string; fork?: boolean; isTeammate?: boolean; workflow?: unknown; model?: string }
-    if (!ctx.orders.isSubagentsAuto || ev.fork || ev.isTeammate || ev.workflow) return next(e)
-    const allowed = subagentModels(ctx.orders.models)
+    if (!orders.get().isSubagentsAuto || ev.fork || ev.isTeammate || ev.workflow) return next(e)
+    const allowed = subagentModels(orders.get().models)
     const pick = await Promise.race([
       $.model
         .complete({
@@ -522,7 +496,7 @@ export const register: Register = on => {
     const result = await next(ev.model ? e : ({ ...e, model: pick.model } as typeof e))
     const id = (result as { agentId?: string }).agentId
     if (id) {
-      const level = clampEffort(pick.effort, ctx.orders.effortMin, ctx.orders.effortMax)
+      const level = clampEffort(pick.effort, orders.get().effortMin, orders.get().effortMax)
       ctx.agentEffort.set(id, level)
       const model = shortModel(String((result as { model?: string }).model ?? pick.model))
       await update($, counts, c => ({ ...c, subagents: c.subagents + 1 }))
@@ -554,7 +528,7 @@ export const register: Register = on => {
     return {
       sections: [
         ...r.sections,
-        { id: `${NAME}:orders`, text: PREAMBLE + ctx.orders.text, scope: 'session' as const },
+        { id: `${NAME}:orders`, text: PREAMBLE + orders.get().text, scope: 'session' as const },
       ],
     }
   })
@@ -589,7 +563,7 @@ export const register: Register = on => {
       return {
         text:
           choice === 'auto'
-            ? `Auto effort on: Haiku picks ${ctx.orders.effortMin} to ${ctx.orders.effortMax} for each prompt you type (Opus and Sonnet 5.5 or newer; mid-chat the model never changes).`
+            ? `Auto effort on: Haiku picks ${orders.get().effortMin} to ${orders.get().effortMax} for each prompt you type (Opus and Sonnet 5.5 or newer; mid-chat the model never changes).`
             : choice === 'off'
               ? 'Auto effort off: your own effort setting stands.'
               : `Effort fixed at ${choice} (Opus and Sonnet 5.5 or newer), no judge.`,
@@ -605,7 +579,7 @@ export const register: Register = on => {
       await writeSetting($, { model: isAuto ? 'auto' : 'off' })
       return {
         text: isAuto
-          ? `Auto model on: a brand-new chat picks its model (${ctx.orders.models.join(', ')}) from your first message. Never mid-chat.`
+          ? `Auto model on: a brand-new chat picks its model (${orders.get().models.join(', ')}) from your first message. Never mid-chat.`
           : 'Auto model off: /model stands.',
       }
     }
@@ -614,7 +588,7 @@ export const register: Register = on => {
       return {
         text:
           arg === 'auto'
-            ? `Auto: answers the orders cover are sent by themselves, up to ${ctx.orders.maxAuto} per prompt. /orders draft to go back.`
+            ? `Auto: answers the orders cover are sent by themselves, up to ${orders.get().maxAuto} per prompt. /orders draft to go back.`
             : 'Draft: answers wait in the prompt box for your Enter.',
       }
     }
@@ -641,7 +615,7 @@ export const register: Register = on => {
     const ev = await read($, effort)
     return {
       text: [
-        `Standing orders: ${(await read($, isPaused)) ? 'paused' : await read($, mode)}, answered ${s.autoCount} of ${ctx.orders.maxAuto}.`,
+        `Standing orders: ${(await read($, isPaused)) ? 'paused' : await read($, mode)}, answered ${s.autoCount} of ${orders.get().maxAuto}.`,
         `Effort: ${ev.isAuto ? 'auto' : 'yours'}${ev.level ? `, now ${ev.level}` : ''}${ev.isSaving ? ' (capped: usage past 85%)' : ''}.`,
         ...(s.pending ? [`Needs you: ${s.pending}`] : []),
         'Details and controls: /autopilot',
@@ -663,8 +637,8 @@ export const register: Register = on => {
     const { Box, Text, Button } = ui
     const Client = clientOf(ui)
     // Motion only where a Client is drawn and the person has not turned it off.
-    const fx = ctx.orders.isMotionOn && e.surface === 'terminal'
-    const show = (i: BandItem) => ctx.orders.band.includes(i)
+    const fx = orders.get().isMotionOn && e.surface === 'terminal'
+    const show = (i: BandItem) => orders.get().band.includes(i)
 
     // Narrow bands get shorter words; whatever still does not fit wraps as whole parts.
     const narrow = (e.props.bodyColumns ?? 100) < 80
@@ -737,7 +711,7 @@ export const register: Register = on => {
     ])
     // The pane body scrolls, so nothing here is squeezed to a height.
     const width = Math.max(30, e.props.bodyColumns ?? 60)
-    const fx = ctx.orders.isMotionOn && e.surface === 'terminal'
+    const fx = orders.get().isMotionOn && e.surface === 'terminal'
     const goTo = (to: 'now' | 'settings') => () => update($, tab, () => to)
     const tabBtn = (id: 'now' | 'settings', text: string) =>
       t === id ? (
@@ -775,7 +749,7 @@ export const register: Register = on => {
 
     if (t === 'settings') {
       // The person's own file, so a repo's orders are never written back into it.
-      const mine = ctx.mine
+      const mine = orders.mine()
       const choice = effortChoice()
       const control = (key: string, icon: string, name: string, color: string, value: string, hint: string, buttons: any, extra?: any) =>
         card(
@@ -859,8 +833,8 @@ export const register: Register = on => {
             choice === 'auto' && (
               <Box flexShrink={0} gap={1}>
                 <Text dimColor>Range</Text>
-                <Button key="floor" label={`floor ${mine.effortMin}${mine.effortMin === 'low' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-min': cycleOf(ctx.mine.effortMin, ['low', 'medium', 'high']) })} />
-                <Button key="ceiling" label={`ceiling ${mine.effortMax}${mine.effortMax === 'xhigh' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-max': cycleOf(ctx.mine.effortMax, ['medium', 'high', 'xhigh', 'max']) })} />
+                <Button key="floor" label={`floor ${mine.effortMin}${mine.effortMin === 'low' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-min': cycleOf(orders.mine().effortMin, ['low', 'medium', 'high']) })} />
+                <Button key="ceiling" label={`ceiling ${mine.effortMax}${mine.effortMax === 'xhigh' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-max': cycleOf(orders.mine().effortMax, ['medium', 'high', 'xhigh', 'max']) })} />
                 <Button key="reset" label="reset" onPress={() => writeSetting($, { 'effort-min': 'low', 'effort-max': 'xhigh' })} />
               </Box>
             ))}
@@ -880,7 +854,7 @@ export const register: Register = on => {
               {chips('band', BAND_ITEMS, mine.band, next => void writeSetting($, { band: next.join(', ') }))}
               <Box justifyContent="space-between">
                 <Text>Prompt cache lasts {mine.cacheTtlMin} min <Text dimColor>(a repo may set its own)</Text></Text>
-                <Button key="ttl" label="⟳ change" onPress={() => writeSetting($, { 'cache-ttl': String(cycleOf(ctx.mine.cacheTtlMin, TTLS)) })} />
+                <Button key="ttl" label="⟳ change" onPress={() => writeSetting($, { 'cache-ttl': String(cycleOf(orders.mine().cacheTtlMin, TTLS)) })} />
               </Box>
             </Box>,
           )}
@@ -896,7 +870,7 @@ export const register: Register = on => {
               }} />
             ))}
           <Text dimColor>
-            {ctx.orders.terms.length} always-ask words · every click saves · rules live in ~/.claude/standing-orders.md
+            {orders.get().terms.length} always-ask words · every click saves · rules live in ~/.claude/standing-orders.md
           </Text>
         </Box>
       )
@@ -926,7 +900,7 @@ export const register: Register = on => {
         <Box justifyContent="space-between">
           <Text bold color={paused ? 'yellow' : m === 'auto' ? 'green' : 'cyan'}>
             {paused ? '⏸ Paused' : m === 'auto' ? '▶ Auto' : '✎ Draft'}
-            <Text dimColor> · answered {s.autoCount} of {ctx.orders.maxAuto}</Text>
+            <Text dimColor> · answered {s.autoCount} of {orders.get().maxAuto}</Text>
           </Text>
           <Box gap={1}>
             <Button key="mode" label={m === 'auto' ? 'Draft' : 'Auto'} onPress={() => setMode($, m === 'auto' ? 'draft' : 'auto')} />
