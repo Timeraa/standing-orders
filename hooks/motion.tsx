@@ -17,7 +17,7 @@ const FRAME_MS = 80
 const EASE_MS = 300
 const FLASH_MS = 900
 
-/** `width` cells for `percent`: full blocks, one eighth-block edge, then the empty track. */
+/** `width` cells for `percent`: full blocks, one eighth-block edge, then the empty track (a thin line). */
 export function barCells(percent: number, width: number, ascii = false) {
   const w = Math.max(1, Math.floor(width))
   const p = Math.min(100, Math.max(0, Number.isFinite(percent) ? percent : 0))
@@ -28,7 +28,7 @@ export function barCells(percent: number, width: number, ascii = false) {
   const eighths = Math.round((p / 100) * w * 8)
   const full = Math.floor(eighths / 8)
   const edge = EIGHTHS[eighths % 8] ?? ''
-  return '█'.repeat(full) + edge + '░'.repeat(Math.max(0, w - full - (edge ? 1 : 0)))
+  return '█'.repeat(full) + edge + '─'.repeat(Math.max(0, w - full - (edge ? 1 : 0)))
 }
 
 /** The bright 3-char window of a shimmering label at `frame`, as [start, end). It slides in, across and out. */
@@ -95,8 +95,8 @@ export default function Motion(props: Props, surface: ClientSurface<State>) {
       <Box>
         <Text dimColor>{props.name} {props.ascii ? '[' : '▕'}</Text>
         {/* the empty track is dim, so only the fill reads as the value */}
-        <Text color={props.color}>{barCells(shown, props.width, props.ascii).replace(/[░-]+$/, '')}</Text>
-        <Text dimColor>{(barCells(shown, props.width, props.ascii).match(/[░-]+$/) ?? [''])[0]}</Text>
+        <Text color={props.color}>{barCells(shown, props.width, props.ascii).replace(/[─-]+$/, '')}</Text>
+        <Text dimColor>{(barCells(shown, props.width, props.ascii).match(/[─-]+$/) ?? [''])[0]}</Text>
         <Text dimColor>{props.ascii ? ']' : '▏'}</Text>
         <Text color={props.color}> {props.text}</Text>
       </Box>

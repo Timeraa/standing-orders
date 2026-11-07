@@ -152,7 +152,7 @@ test('the band and the Autopilot pane draw: Now, then Settings, whose buttons wr
       expect(await bar('ctx')).toMatchObject({ kind: 'bar', percent: 41, text: '41%', color: 'green' })
       expect(await bar('limit')).toMatchObject({ kind: 'bar', percent: 20, text: '20%' })
       // and what the module itself draws: the track, the edge and the value
-      expect((await pane.find({ type: 'Text', text: /█/, in: 'bar-ctx' }))?.text).toBe(barCells(41, 24).replace(/░+$/, ''))
+      expect((await pane.find({ type: 'Text', text: /█/, in: 'bar-ctx' }))?.text).toBe(barCells(41, 24).replace(/─+$/, ''))
       expect(await pane.find({ type: 'Text', text: /41%/, in: 'bar-ctx' })).toBeTruthy()
       expect(await bar('cache')).toMatchObject({ kind: 'bar', text: '51:40 left', color: 'cyan' })
       expect(Math.round(((await bar('cache')) as { percent: number }).percent)).toBe(86)
@@ -511,15 +511,15 @@ test('Settings customize the status line, replies, models, cache and motion', as
 })
 
 test('motion helpers: bars, the shimmer window, the easing', () => {
-  expect(barCells(0, 8)).toBe('░░░░░░░░')
+  expect(barCells(0, 8)).toBe('────────')
   expect(barCells(100, 8)).toBe('████████')
-  expect(barCells(50, 8)).toBe('████░░░░')
-  expect(barCells(41, 10)).toBe('████▏░░░░░') // 4.1 cells: four full and a sliver
-  expect(barCells(45, 10)).toBe('████▌░░░░░')
+  expect(barCells(50, 8)).toBe('████────')
+  expect(barCells(41, 10)).toBe('████▏─────') // 4.1 cells: four full and a sliver
+  expect(barCells(45, 10)).toBe('████▌─────')
   expect(barCells(45, 10, true)).toBe('#####-----')
   expect([...barCells(33, 12)].length).toBe(12)
-  expect(barCells(-5, 4)).toBe('░░░░')
-  expect(barCells(Number.NaN, 4)).toBe('░░░░')
+  expect(barCells(-5, 4)).toBe('────')
+  expect(barCells(Number.NaN, 4)).toBe('────')
   expect(barCells(250, 4)).toBe('████')
   expect(shimmerWindow('deciding'.length, 0)).toEqual([0, 0])
   expect(shimmerWindow(8, 2)).toEqual([0, 2])

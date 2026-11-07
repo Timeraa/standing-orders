@@ -939,11 +939,11 @@ export const register: Register = on => {
           ev.isJudging ? (
             fx ? <Client key="judging" module="./motion.tsx" props={{ kind: 'spinner', label: 'deciding' }} /> : <Text dimColor>deciding…</Text>
           ) : ev.level ? (
-            <Box>
+            <Box flexDirection="column">
               <Text bold color={EFFORT_COLOR[ev.level]}>{ev.model ? `${cap(ev.model)} · ` : ''}{cap(ev.level)}</Text>
-              <Box marginLeft={1} flexShrink={1}>
-                <Text dimColor>{!ev.isAuto ? '· set by you' : ev.why && ev.why !== 'auto' ? `· ${ev.why}` : ''}{ev.isSaving ? ' · capped by usage' : ''}</Text>
-              </Box>
+              {(!ev.isAuto || (ev.why && ev.why !== 'auto') || ev.isSaving) && (
+                <Text dimColor>{!ev.isAuto ? 'set by you' : ev.why && ev.why !== 'auto' ? ev.why : ''}{ev.isSaving ? `${ev.why && ev.why !== 'auto' ? ' · ' : ''}capped by usage` : ''}</Text>
+              )}
             </Box>
           ) : <Text dimColor>Picked with your next prompt.</Text>,
         )}
@@ -971,17 +971,24 @@ export const register: Register = on => {
                   const age = v.now - c.at
                   const life = checkLife(age)
                   const isNewest = c === shown[0]
-                  return (
+                  const done = <Button key={`tick${id}`} label="✓ Done" /* a hover scope is capped at 64 characters: never build one from text */ hover={{ scope: `done-${c.at}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
+                  const ask = <Button key={`ask${id}`} dimColor label="↳ Ask" hover={{ scope: `ask-${c.at}`, color: 'cyan' }} onPress={() => void $.prompt.fill({ text: `About this check: ${c.text}`, mode: 'replace' })} />
+                  const line = isNewest && isFresh(c.at) ? (
+                    <Client key={`flash-check-${c.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: '', body: `${text} · ${checkAge(age)}` }} />
+                  ) : (
+                    <Text>{text} <Text dimColor>· {checkAge(age)}</Text>{life ? <Text color="yellow"> · {life}</Text> : null}</Text>
+                  )
+                  // Wide: one row. Narrow: the text gets the full width, its buttons sit under it.
+                  return width >= 80 ? (
                     <Box key={`check${id}`} gap={1} paddingLeft={g.lead ? 2 : 0}>
-                      <Button key={`tick${id}`} label="✓ Done" /* a hover scope is capped at 64 characters: never build one from text */ hover={{ scope: `done-${c.at}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
-                      <Box flexShrink={1} flexGrow={1}>
-                        {isNewest && isFresh(c.at) ? (
-                          <Client key={`flash-check-${c.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: '', body: `${text} · ${checkAge(age)}` }} />
-                        ) : (
-                          <Text>{text} <Text dimColor>· {checkAge(age)}</Text>{life ? <Text color="yellow"> · {life}</Text> : null}</Text>
-                        )}
-                      </Box>
-                      <Button key={`ask${id}`} dimColor label="↳ Ask" hover={{ scope: `ask-${c.at}`, color: 'cyan' }} onPress={() => void $.prompt.fill({ text: `About this check: ${c.text}`, mode: 'replace' })} />
+                      {done}
+                      <Box flexShrink={1} flexGrow={1}>{line}</Box>
+                      {ask}
+                    </Box>
+                  ) : (
+                    <Box key={`check${id}`} flexDirection="column" paddingLeft={g.lead ? 2 : 0} marginTop={1}>
+                      {line}
+                      <Box gap={2}>{done}{ask}</Box>
                     </Box>
                   )
                 })}

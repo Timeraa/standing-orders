@@ -5,6 +5,7 @@
 - The pane's sections are bordered cards that light up under the pointer (yellow when something needs you); the tab strip underlines the active tab; buttons light on hover. The footer line became Usage bars (a text line in a narrow pane).
 - Needs you is more useful: items that share a lead ("After /reload-plugins, …") sit under one heading with **Done all**; each item has **↳ Ask**, which puts it in your prompt box; the last day before an item drops says "drops in 5h"; the waiting question says where to answer.
 - The status line is responsive: it reads its width, shortens its words below 80 columns (`✎ draft`, `Sonnet·High`) and wraps whole parts instead of breaking them mid-label.
+- Narrow panes read better: a Needs you item gets the full width with Done and Ask under it (one row from 80 columns), the Effort card puts the reason on its own line, and a bar's empty track is a thin line.
 - Settings are grouped by priority: a missing repo orders file leads as its own card, then How it answers (replies, effort), Models, Display; a found repo file drops to the bottom.
 - Settings: the model choices live inside the New chats card; usage bars show only the fill in colour, the empty track is dim.
 - Settings now covers everything: which models a new chat may pick, answers in a row (`max-auto`), your always-ask words (remove or add), which parts the status line shows (`band:`, now with an optional `limit` part), and the prompt-cache window (`cache-ttl`).
