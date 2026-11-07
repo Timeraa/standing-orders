@@ -256,7 +256,7 @@ export function createPicks(orders: () => Orders) {
      * change in the request (spread it over the event). On a turn's first request it waits (up
      * to the deadline) for the judges started by the prompt.
      */
-    async request(host: Host, req: { index: number; model: string; effort: unknown }): Promise<{ effort?: Effort; model?: string }> {
+    async request(host: Host, req: { index: number; model: string; effort?: unknown }): Promise<{ effort?: Effort; model?: string }> {
       // The chat's pick from its first prompt: every main request goes there until the person runs /model.
       if (req.index === 0) await pickModel(host, req.model)
       if (chatModel && req.model !== chatModel.base) chatModel = null
