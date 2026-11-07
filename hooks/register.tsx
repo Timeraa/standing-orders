@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Check, Counts, EffortView, LogEntry, Run, Vitals } from '../types'
+import type { Check, Counts, EffortView, LogEntry, Vitals } from '../types'
 import {
   HELP,
   INIT_PROMPT,
@@ -19,11 +19,11 @@ import {
 import { checkAge, createChecks, type Host as ChecksHost } from './checks'
 import { BAND_ITEMS, createOrders, type BandItem, type FileStore, type Settings } from './orders'
 import { createPicks, type Host } from './picks'
+import { IDLE, beforeJudging, decide, drafted, sent, waiting, whenTyped } from './run'
 import { bandView, effortColor, paneView } from './view'
 
 const NAME = 'standing-orders'
 const PANE = 'autopilot'
-const IDLE: Run = { autoCount: 0, startedAt: 0, pending: null, last: null }
 const run = atom({ plugin: 'standing-orders', key: 'run' } as const, IDLE)
 const isPaused = atom({ plugin: 'standing-orders', key: 'isPaused' } as const, false)
 // ponytail: per session on purpose; every new session starts in draft mode.
@@ -162,7 +162,7 @@ async function reloadOrders($: EngineInterface, force = false) {
 }
 
 async function wait($: EngineInterface, decision: string) {
-  await update($, run, s => ({ ...s, pending: decision }))
+  await update($, run, s => waiting(s, decision))
   await note($, 'asked', decision)
   const sofar = (await read($, log))
     .filter(l => l.kind === 'answered' || l.kind === 'drafted')
@@ -174,8 +174,7 @@ async function wait($: EngineInterface, decision: string) {
 
 async function judge($: EngineInterface, answer: string, durationMs: number) {
   const judgedAt = await $.clock.now()
-  if (await read($, isPaused)) return
-  if (ctx.composerAt > ctx.turnStartedAt) return // the person spoke during the turn
+  if (beforeJudging({ isPaused: await read($, isPaused), composerAt: ctx.composerAt, turnStartedAt: ctx.turnStartedAt })) return
 
   const tail = answer.slice(-2500)
   const open = await read($, checks)
@@ -189,10 +188,23 @@ async function judge($: EngineInterface, answer: string, durationMs: number) {
   const v = r.isAnswered ? parseVerdict(r.text) : null
   if (!v) return
   await needsYou.add(checkHost($), v.checks, v.resolved, await $.clock.now())
-  if (ctx.composerAt > judgedAt) return // the person took over meanwhile
 
   const state = await read($, run)
-  if (v.action === 'stop') {
+  const d = await decide(
+    {
+      verdict: v,
+      composerAt: ctx.composerAt,
+      judgedAt,
+      railed: orders.get().rail?.exec(`${v.reply ?? ''} ${asked(tail)}`)?.[0] ?? null,
+      isAuto: (await read($, mode)) === 'auto',
+      autoCount: state.autoCount,
+      maxAuto: orders.get().maxAuto,
+    },
+    async () => !!(await $.prompt.read()).text.trim(),
+  )
+  if (d.do === 'skip') return
+  if (d.do === 'ask') return wait($, d.text)
+  if (d.do === 'stop') {
     await note($, 'stopped', v.decision || 'Finished.')
     if (state.autoCount > 0) {
       await $.ui.notify(v.decision || 'Finished.', {
@@ -203,28 +215,16 @@ async function judge($: EngineInterface, answer: string, durationMs: number) {
     }
     return
   }
-  if (v.action === 'ask') return wait($, v.decision || 'Claude is waiting on you.')
-
-  // continue: a plain-code rail first, whatever the judge said.
-  const railed = orders.get().rail?.exec(`${v.reply ?? ''} ${asked(tail)}`)
-  if (railed) return wait($, v.decision || `Claude asks about "${railed[0]}": your call.`)
-  const isAuto = (await read($, mode)) === 'auto'
-  if (isAuto && state.autoCount >= orders.get().maxAuto) {
-    return wait($, `${state.autoCount} standing answers this run. Check in.`)
-  }
-  if ((await $.prompt.read()).text.trim()) return // already typing a reply
-
-  const reply = v.reply || 'Per my standing orders: keep going.'
-  if (isAuto) {
-    await update($, run, s => ({ ...s, autoCount: s.autoCount + 1, last: reply, pending: null }))
-    await note($, 'answered', reply)
-    await $.prompt.submit({ text: reply })
+  if (d.do === 'send') {
+    await update($, run, s => sent(s, d.reply))
+    await note($, 'answered', d.reply)
+    await $.prompt.submit({ text: d.reply })
     return
   }
-  await update($, run, s => ({ ...s, last: reply, pending: null }))
-  await note($, 'drafted', reply)
-  await $.prompt.fill({ text: reply, mode: 'replace' })
-  await $.ui.notify(reply, { title: 'Answer drafted from your orders: Enter sends it, or type your own' })
+  await update($, run, s => drafted(s, d.reply))
+  await note($, 'drafted', d.reply)
+  await $.prompt.fill({ text: d.reply, mode: 'replace' })
+  await $.ui.notify(d.reply, { title: 'Answer drafted from your orders: Enter sends it, or type your own' })
 }
 
 // ---- vitals -------------------------------------------------------------
@@ -296,14 +296,14 @@ export const register: Register = on => {
       await picks.setAuto(pickHost($), false)
     } else if (e.origin.kind === 'composer' && !e.command) {
       ctx.composerAt = await $.clock.now()
-      const isDraftSent = (await read($, run)).last === e.text.trim()
       if (e.turnId === undefined) {
         // Enter on a drafted answer continues the run; anything typed starts a new one.
-        await update($, run, s =>
-          isDraftSent
-            ? { ...s, autoCount: s.autoCount + 1, pending: null }
-            : { ...IDLE, startedAt: ctx.composerAt },
-        )
+        let isDraftSent = false as boolean // set inside the update (the closure runs before the await returns)
+        await update($, run, s => {
+          const typed = whenTyped(s, { text: e.text, now: ctx.composerAt })
+          isDraftSent = typed.isDraftSent
+          return typed.run
+        })
         if (isDraftSent) ctx.composerAt = 0
         else await reloadOrders($, true)
         await picks.typed(pickHost($), { text: e.text, isDraftSent })
