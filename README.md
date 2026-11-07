@@ -140,8 +140,13 @@ claude plugin validate .
 
 After edits: `claude plugin update standing-orders@standing-orders` and restart.
 
-- `hooks/judges.ts`: pure parts (prompts, parsers, log lines). Tested directly.
-- `hooks/register.tsx`: the mod itself (judge loop, commands, band, the Autopilot pane).
+- `hooks/orders.ts`: the one home of the orders files (read, trust-merge, write, refresh, first-run seed).
+- `hooks/picks.ts`: the effort, new-chat model and subagent judges, their deadline and bounds.
+- `hooks/checks.ts`: the Needs you list (lifecycle, persistence, item identity).
+- `hooks/run.ts`: the autopilot run and the order of the end-of-turn guards.
+- `hooks/view.ts`: what the status line and the pane show, derived once for both.
+- `hooks/judges.ts`: the remaining pure parts (prompts, parsers, log lines). Tested directly.
+- `hooks/register.tsx`: the mod itself (hook wiring, commands, the drawing of the band and pane).
 - `hooks/motion.tsx`: the surface module for the animated bits (spinner, bars, flash); pure drawing, no engine access.
 - `tests/`: runs with `claude plugin test`.
 
