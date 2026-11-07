@@ -971,8 +971,10 @@ export const register: Register = on => {
                   const age = v.now - c.at
                   const life = checkLife(age)
                   const isNewest = c === shown[0]
-                  const done = <Button key={`tick${id}`} label="✓ Done" /* a hover scope is capped at 64 characters: never build one from text */ hover={{ scope: `done-${c.at}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
-                  const ask = <Button key={`ask${id}`} dimColor label="↳ Ask" hover={{ scope: `ask-${c.at}`, color: 'cyan' }} onPress={() => void $.prompt.fill({ text: `About this check: ${c.text}`, mode: 'replace' })} />
+                  // unique per item: checks found in one turn share a timestamp, and a shared scope lights them together
+                  const n = shown.indexOf(c)
+                  const done = <Button key={`tick${id}`} label="✓ Done" /* a scope is capped at 64 characters and shared by equal strings: build it from the position, not text or time */ hover={{ scope: `done-${n}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
+                  const ask = <Button key={`ask${id}`} dimColor label="↳ Ask" hover={{ scope: `ask-${n}`, color: 'cyan' }} onPress={() => void $.prompt.fill({ text: `About this check: ${c.text}`, mode: 'replace' })} />
                   const line = isNewest && isFresh(c.at) ? (
                     <Client key={`flash-check-${c.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: '', body: `${text} · ${checkAge(age)}` }} />
                   ) : (
