@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.2
+- The Now tab has an Effort block: the level the mod picked for your prompt and why (or "set by you", or "capped by usage"). Settings no longer carry it.
+- The band above the prompt and the Now tab show the model the chat runs on next to the effort (`Opus · High`), including a model the mod picked for a new chat.
+- Settings rows no longer wrap ("Range") or run together ("Repo orders").
+
 ## 0.9.1
 - Orders written while a session runs (Claude writing the repo file after "Write them", or an edit to either file) now reach the pane within 5 seconds, instead of only after your next prompt.
 

@@ -1,6 +1,6 @@
 {
   "name": "standing-orders",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "license": "MIT",
   "description": "Autopilot for Claude Code: answers end-of-turn questions from your written rules, picks the effort per prompt (or fixes it), the model for each new chat, and the model and effort for subagents. Status line and an /autopilot pane with what needs you, what it picked and the settings.",
   "types": "./types/index.d.ts",
