@@ -14,6 +14,8 @@ import {
   STOPS,
   asked,
   checkAge,
+  checkLife,
+  groupChecks,
   liveChecks,
   loadChecks,
   mergeChecks,
@@ -664,9 +666,11 @@ export const register: Register = on => {
     const fx = ctx.orders.isMotionOn && e.surface === 'terminal'
     const show = (i: BandItem) => ctx.orders.band.includes(i)
 
-    const label = paused ? 'Orders paused' : m === 'auto' ? 'Orders: auto' : 'Orders: draft'
+    // Narrow bands get shorter words; whatever still does not fit wraps as whole parts.
+    const narrow = (e.props.bodyColumns ?? 100) < 80
+    const label = narrow ? (paused ? 'paused' : m === 'auto' ? 'auto' : 'draft') : paused ? 'Orders paused' : m === 'auto' ? 'Orders: auto' : 'Orders: draft'
     const effortText = ev.level
-      ? `${ev.model ? `${cap(ev.model)} · ` : ''}${cap(ev.level)}${ev.isAuto ? '' : ' (yours)'}${ev.isSaving ? ' · save' : ''}`
+      ? `${ev.model ? `${cap(ev.model)}${narrow ? '·' : ' · '}` : ''}${cap(ev.level)}${ev.isAuto ? '' : narrow ? '*' : ' (yours)'}${ev.isSaving ? ' · save' : ''}`
       : ''
     const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
     const isCold = left !== null && left <= 0
@@ -703,17 +707,16 @@ export const register: Register = on => {
     if (show('cache') && left !== null) {
       parts.push(['cache', <Text color={isCold ? 'yellow' : 'cyan'}>{isCold ? 'cache cold' : `cache ${clock(left)}`}</Text>])
     }
-    if (show('hint') && !v.hasRepoOrders) parts.push(['hint', <Text dimColor>no repo orders: /orders init</Text>])
+    if (show('hint') && !v.hasRepoOrders) parts.push(['hint', <Text dimColor>{narrow ? 'no repo orders' : 'no repo orders: /orders init'}</Text>])
     if (show('autopilot')) {
-      parts.push(['autopilot', <Button key="autopilot" label={list.length > 0 ? `Autopilot · ${list.length} to do` : 'Autopilot'} onPress={() => openPane($)} />])
+      parts.push(['autopilot', <Button key="autopilot" label={list.length > 0 ? `Autopilot · ${list.length}${narrow ? '' : ' to do'}` : 'Autopilot'} onPress={() => openPane($)} />])
     }
 
     return (
       <Box flexDirection="column">
-        <Box>
-          {parts.map(([k, node], i) => (
-            <Box key={`part-${k}`}>
-              {i > 0 && <Text dimColor> · </Text>}
+        <Box flexWrap="wrap" columnGap={2}>
+          {parts.map(([k, node]) => (
+            <Box key={`part-${k}`} flexShrink={0}>
               {node}
             </Box>
           ))}
@@ -835,8 +838,8 @@ export const register: Register = on => {
             ))}
           {control('chats', '◇', 'New chats', 'blue', mine.isModelAuto ? `auto · ${mine.models.join(' / ')}` : 'your /model',
             'Picks the model from your first message, only while the chat is empty (cache-safe). Choose which models it may use.',
-            onOff(mine.isModelAuto, 'model'))}
-          {mine.isModelAuto && chips('model', MODEL_NAMES, mine.models, next => void writeSetting($, { models: next.join(', ') }), true)}
+            onOff(mine.isModelAuto, 'model'),
+            mine.isModelAuto && chips('model', MODEL_NAMES, mine.models, next => void writeSetting($, { models: next.join(', ') }), true))}
           {control('subagents', '◇', 'Subagents', 'cyan', mine.isSubagentsAuto ? 'auto · model + effort per task' : 'inherit the chat',
             'Picks a model (Haiku for mechanical work) and effort for each helper from its task. Anything you named wins.',
             onOff(mine.isSubagentsAuto, 'subagents'))}
@@ -937,23 +940,42 @@ export const register: Register = on => {
         {hasPending ? card(
           'needs', `Needs you · ${(s.pending ? 1 : 0) + list.length}`, 'yellow',
           <Box flexDirection="column">
-            {s.pending && <Text color="yellow" bold>? {fit(s.pending, width - 6)}</Text>}
-            {shown.map((c, i) => {
-              const id = `${c.at}:${c.text}`
-              const body = `${c.text} · ${checkAge(v.now - c.at)}`
-              return (
-                <Box key={`check${id}`} gap={1}>
-                  <Button key={`tick${id}`} label="✓ Done" /* a hover scope is capped at 64 characters: never build one from text */ hover={{ scope: `done-${c.at}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
-                  <Box flexShrink={1}>
-                    {i === 0 && isFresh(c.at) ? (
-                      <Client key={`flash-check-${c.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: '', body }} />
-                    ) : (
-                      <Text>{c.text} <Text dimColor>· {checkAge(v.now - c.at)}</Text></Text>
-                    )}
+            {s.pending && (
+              <Box flexDirection="column">
+                <Text color="yellow" bold>? {fit(s.pending, width - 6)}</Text>
+                <Text dimColor>  Claude is waiting on this. Answer in the prompt.</Text>
+              </Box>
+            )}
+            {s.pending && shown.length > 0 && <Text dimColor>Only you can check:</Text>}
+            {groupChecks(shown).map((g, gi) => (
+              <Box key={`grp${gi}-${g.lead ?? ''}`} flexDirection="column" marginTop={gi > 0 || s.pending ? 1 : 0}>
+                {g.lead && (
+                  <Box justifyContent="space-between">
+                    <Text bold>{g.lead} <Text dimColor>· {g.items.length}</Text></Text>
+                    <Button key={`all${gi}`} dimColor label="Done all" hover={{ scope: `all-${gi}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => !g.items.some(y => y.item.at === x.at && y.item.text === x.text)))} />
                   </Box>
-                </Box>
-              )
-            })}
+                )}
+                {g.items.map(({ item: c, text }) => {
+                  const id = `${c.at}:${c.text}`
+                  const age = v.now - c.at
+                  const life = checkLife(age)
+                  const isNewest = c === shown[0]
+                  return (
+                    <Box key={`check${id}`} gap={1} paddingLeft={g.lead ? 2 : 0}>
+                      <Button key={`tick${id}`} label="✓ Done" /* a hover scope is capped at 64 characters: never build one from text */ hover={{ scope: `done-${c.at}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
+                      <Box flexShrink={1} flexGrow={1}>
+                        {isNewest && isFresh(c.at) ? (
+                          <Client key={`flash-check-${c.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: '', body: `${text} · ${checkAge(age)}` }} />
+                        ) : (
+                          <Text>{text} <Text dimColor>· {checkAge(age)}</Text>{life ? <Text color="yellow"> · {life}</Text> : null}</Text>
+                        )}
+                      </Box>
+                      <Button key={`ask${id}`} dimColor label="↳ Ask" hover={{ scope: `ask-${c.at}`, color: 'cyan' }} onPress={() => void $.prompt.fill({ text: `About this check: ${c.text}`, mode: 'replace' })} />
+                    </Box>
+                  )
+                })}
+              </Box>
+            ))}
             {list.length > SHOWN_CHECKS && (
               <Button key="older" label={isOpen ? 'Show fewer' : `+${list.length - SHOWN_CHECKS} older`} onPress={() => update($, isChecksOpen, o => !o)} />
             )}

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { DEFAULT_ORDERS, fit, isPick, logBody, logLine, parseBand, parseOrders, pickText, setSetting } from '../hooks/judges'
+import { DEFAULT_ORDERS, checkLife, fit, groupChecks, splitLead, isPick, logBody, logLine, parseBand, parseOrders, pickText, setSetting } from '../hooks/judges'
 import { barCells, ease, shimmerWindow } from '../hooks/motion'
 
 declare const setTimeout: (fn: () => void, ms: number) => unknown
@@ -152,7 +152,7 @@ test('the band and the Autopilot pane draw: Now, then Settings, whose buttons wr
       expect(await bar('ctx')).toMatchObject({ kind: 'bar', percent: 41, text: '41%', color: 'green' })
       expect(await bar('limit')).toMatchObject({ kind: 'bar', percent: 20, text: '20%' })
       // and what the module itself draws: the track, the edge and the value
-      expect((await pane.find({ type: 'Text', text: /█/, in: 'bar-ctx' }))?.text).toBe(barCells(41, 24))
+      expect((await pane.find({ type: 'Text', text: /█/, in: 'bar-ctx' }))?.text).toBe(barCells(41, 24).replace(/░+$/, ''))
       expect(await pane.find({ type: 'Text', text: /41%/, in: 'bar-ctx' })).toBeTruthy()
       expect(await bar('cache')).toMatchObject({ kind: 'bar', text: '51:40 left', color: 'cyan' })
       expect(Math.round(((await bar('cache')) as { percent: number }).percent)).toBe(86)
@@ -542,4 +542,97 @@ test('band setting: the default, a custom list, and none', () => {
   expect(parseOrders('motion: off').isMotionOn).toBe(false)
   // a list that adds up over lines collapses to one when written back
   expect(setSetting('always-ask: a, b\nmax-auto: 8\nalways-ask: c\n', 'always-ask', 'a', true)).toBe('always-ask: a\nmax-auto: 8\n')
+})
+
+test('Needs you groups items that share a lead, with Done all, Ask and a heads-up before an item drops', async ($: any, on: any) => {
+  const clock = mock.clock(on, { now: 10 * 86_400_000 })
+  const set = store(on)
+  const filled: string[] = []
+  on('command.register', () => ({ value: { command: 'orders' } }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('env.get', () => ({ value: '/home/t' }))
+  on('fs.read', () => ({ value: DEFAULT_ORDERS }))
+  on('fs.write', () => ({ value: undefined }))
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('agent.list', () => ({ value: [] }))
+  on('prompt.fill', (_: unknown, e: { text: string }) => {
+    filled.push(e.text)
+    return { isFilled: true }
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await settle()
+  const now = clock.now()
+  await set('tab', 'now')
+  await set('vitals', { now, contextPercent: null, lastResponseAt: 0, cacheTtlMin: 60, ratePercent: null, hasRepoOrders: true })
+  await set('checks', [
+    { text: 'Ship the island on a notched Mac', at: now - 2.5 * 86_400_000, chat: 'a' },
+    { text: 'After /reload-plugins, watch the band spinner stop.', at: now - 3_600_000, chat: 'a' },
+    { text: 'After /reload-plugins, open /autopilot docked and inline.', at: now - 3_700_000, chat: 'a' },
+    { text: 'After /reload-plugins, confirm the bars ease.', at: now - 3_800_000, chat: 'a' },
+  ])
+  let pane = await $.ui.mount(PANE('terminal'))
+  const text = async (re: RegExp) => (await pane.find({ type: 'Text', text: re }))?.text as string | undefined
+  expect(await text(/^After \/reload-plugins/)).toContain('· 3') // one heading, not three prefixes
+  expect(await pane.find({ type: 'Text', text: /After \/reload-plugins, / })).toBeFalsy()
+  expect(await text(/Open \/autopilot docked/)).toBeTruthy() // the rest, capitalised
+  expect(await text(/notched Mac/)).toContain('drops in') // 2.5 days old: its last day is near
+  expect(await pane.find({ type: 'Text', text: /Watch the band spinner/ })).toBeTruthy()
+  expect(await pane.find({ type: 'Button', key: 'all0' })).toBeTruthy()
+
+  // Ask hands the item to the prompt box
+  await pane.press({ key: `ask${now - 3_600_000}:After /reload-plugins, watch the band spinner stop.` })
+  expect(filled.at(-1)).toBe('About this check: After /reload-plugins, watch the band spinner stop.')
+  await pane.unmount()
+})
+
+test('check grouping and expiry helpers', () => {
+  expect(splitLead('After /reload-plugins, open it')).toEqual({ lead: 'After /reload-plugins', rest: 'Open it' })
+  expect(splitLead('Open it, then close it')).toEqual({ lead: null, rest: 'Open it, then close it' })
+  const g = groupChecks([
+    { text: 'After abc, one' },
+    { text: 'Solo task' },
+    { text: 'after ABC, two' },
+    { text: 'When bcd, alone' },
+  ])
+  expect(g.map(x => [x.lead, x.items.map(i => i.text)])).toEqual([
+    ['After abc', ['One', 'Two']],
+    [null, ['Solo task', 'When bcd, alone']], // a lead only one item has stays whole
+  ])
+  expect(checkLife(86_400_000)).toBe('')
+  expect(checkLife(2.5 * 86_400_000)).toBe('drops in 12h')
+})
+
+// The band reads its width: short words when narrow, and parts wrap whole instead of breaking mid-label.
+test('the band shortens its words in a narrow column', async ($: any, on: any) => {
+  mock.clock(on)
+  const set = store(on)
+  on('command.register', () => ({ value: { command: 'orders' } }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('env.get', () => ({ value: '/home/t' }))
+  on('fs.read', () => ({ value: DEFAULT_ORDERS }))
+  on('fs.write', () => ({ value: undefined }))
+  on('store.get', () => ({ value: undefined }))
+  on('agent.list', () => ({ value: [] }))
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await settle()
+  await set('effort', { level: 'high', model: 'sonnet', why: '', isAuto: true, isJudging: false, isSaving: false })
+  await set('vitals', { now: 1, contextPercent: 20, lastResponseAt: 0, cacheTtlMin: 60, ratePercent: null, hasRepoOrders: false })
+  const labels = async (bodyColumns: number) => {
+    const b = await $.ui.mount({ plugin: 'standing-orders', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns } })
+    const out = [
+      (await b.findAll({ type: 'Button' })).map((x: any) => x.label ?? x.text),
+      (await b.findAll({ type: 'Text' })).map((x: any) => x.text),
+    ]
+    await b.unmount()
+    return out
+  }
+  const [wideB, wideT] = await labels(120)
+  expect(wideB[0]).toBe('✎ Orders: draft')
+  expect(wideT).toContain('Sonnet · High')
+  expect(wideT).toContain('no repo orders: /orders init')
+  const [narrowB, narrowT] = await labels(50)
+  expect(narrowB[0]).toBe('✎ draft')
+  expect(narrowT).toContain('Sonnet·High')
+  expect(narrowT).toContain('no repo orders')
 })

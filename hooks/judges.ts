@@ -157,6 +157,39 @@ export function mergeChecks(old: readonly Check[], fresh: readonly string[], res
   return [...keep, ...next.map(text => ({ text, at: now, chat }))].slice(-MAX_CHECKS)
 }
 
+// "After /reload-plugins, open /autopilot ..." splits into the lead ("After /reload-plugins") and what to do.
+const LEAD = /^((?:after|once|when|before|while|in|on|at)\s[^,:]{3,60}),\s+(\S[\s\S]*)$/i
+export function splitLead(text: string): { lead: string | null; rest: string } {
+  const m = LEAD.exec(text.trim())
+  if (!m) return { lead: null, rest: text.trim() }
+  const rest = m[2] ?? ''
+  return { lead: m[1] ?? null, rest: rest.charAt(0).toUpperCase() + rest.slice(1) }
+}
+
+export type CheckGroup<T> = { lead: string | null; items: { item: T; text: string }[] }
+// Items that share a lead (two or more) group under it, in order of first sight; the rest stay whole.
+export function groupChecks<T extends { text: string }>(items: readonly T[]): CheckGroup<T>[] {
+  const split = items.map(item => ({ item, ...splitLead(item.text) }))
+  const count = new Map<string, number>()
+  for (const x of split) if (x.lead) count.set(x.lead.toLowerCase(), (count.get(x.lead.toLowerCase()) ?? 0) + 1)
+  const groups: CheckGroup<T>[] = []
+  for (const x of split) {
+    const grouped = !!x.lead && (count.get(x.lead.toLowerCase()) ?? 0) > 1
+    const lead = grouped ? x.lead : null
+    const entry = { item: x.item, text: grouped ? x.rest : x.item.text }
+    const home = groups.find(g => (lead ? g.lead?.toLowerCase() === lead.toLowerCase() : g.lead === null && g === groups.at(-1)))
+    if (home) home.items.push(entry)
+    else groups.push({ lead, items: [entry] })
+  }
+  return groups
+}
+
+// The last day of an item's life says so: it is about to drop by itself.
+export function checkLife(ageMs: number) {
+  const left = CHECK_TTL_MS - ageMs
+  return left <= 86_400_000 ? `drops in ${checkAge(left)}` : ''
+}
+
 export function checkAge(ms: number) {
   const m = Math.floor(Math.max(0, ms) / 60_000)
   return m < 1 ? 'now' : m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`

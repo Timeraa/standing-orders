@@ -94,7 +94,9 @@ export default function Motion(props: Props, surface: ClientSurface<State>) {
     return (
       <Box>
         <Text dimColor>{props.name} {props.ascii ? '[' : '▕'}</Text>
-        <Text color={props.color}>{barCells(shown, props.width, props.ascii)}</Text>
+        {/* the empty track is dim, so only the fill reads as the value */}
+        <Text color={props.color}>{barCells(shown, props.width, props.ascii).replace(/[░-]+$/, '')}</Text>
+        <Text dimColor>{(barCells(shown, props.width, props.ascii).match(/[░-]+$/) ?? [''])[0]}</Text>
         <Text dimColor>{props.ascii ? ']' : '▏'}</Text>
         <Text color={props.color}> {props.text}</Text>
       </Box>

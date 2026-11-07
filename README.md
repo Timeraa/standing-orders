@@ -57,7 +57,7 @@ The line above the prompt has two buttons: the mode label (click to cycle draft 
 **Now**
 
 - mode, answers given, and buttons for Draft/Auto and Pause;
-- **Needs you**: the pending question, then things only you can check (a real device, an account, another person), each with a **Done** button and its age. It never holds what Claude could run or look up itself. Each judged turn replaces its own chat's earlier items, the judge ticks off ones the conversation shows are done, and items drop after 3 days. The pane shows the newest five with a **+N older** button;
+- **Needs you**: the pending question, then things only you can check (a real device, an account, another person), each with a **Done** button and its age. It never holds what Claude could run or look up itself. Each judged turn replaces its own chat's earlier items, the judge ticks off ones the conversation shows are done, and items drop after 3 days. The pane shows the newest five with a **+N older** button. Items that share a lead ("After /reload-plugins, …") group under one heading with **Done all**; **↳ Ask** puts an item in your prompt box; an item in its last day says when it drops;
 - **Activity**: the last 8 things the mod did, newest first. Decisions (`✓` sent, `✎` drafted, `?` asked you, `■` finished) and dimmed picks with their reason, for example `◆ effort high · multi-file feature`, `◇ new chat → opus · hard debugging`, `◇ subagent → haiku/low · grep the repo`. A line below counts this session's picks;
 - **Usage**: context, limit and prompt-cache time left as bars, coloured by how full they are (one text line in a narrow pane).
 
