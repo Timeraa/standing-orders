@@ -483,7 +483,7 @@ export const register: Register = on => {
     const level = ev.isAuto && takesEffort(model) ? (ctx.orders.effortFixed ?? ctx.turnEffort) : null
     if (level) ctx.lastApplied = level
     if (level && e.index === 0) void tally($, 'effort', level)
-    await update($, effort, v => ({ ...v, level: level ?? (e.effort === undefined ? null : String(e.effort)) }))
+    await update($, effort, v => ({ ...v, model: shortModel(model), level: level ?? (e.effort === undefined ? null : String(e.effort)) }))
 
     const r = yield* next({ ...e, ...(level ? { effort: level } : {}), ...(ctx.chatModel ? { model } : {}) })
     const done = await $.clock.now()
@@ -655,7 +655,7 @@ export const register: Register = on => {
     const effortText = ev.isJudging
       ? 'effort: deciding'
       : ev.level
-        ? `${cap(ev.level)}${ev.isAuto ? '' : ' (yours)'}${ev.isSaving ? ' · save' : ''}`
+        ? `${ev.model ? `${cap(ev.model)} · ` : ''}${cap(ev.level)}${ev.isAuto ? '' : ' (yours)'}${ev.isSaving ? ' · save' : ''}`
         : ''
     const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
     const isCold = left !== null && left <= 0
@@ -800,7 +800,7 @@ export const register: Register = on => {
           {heading('Effort', 'magenta')}
           {ev.isJudging ? <Text dimColor>deciding…</Text> : ev.level ? (
             <Box>
-              <Text bold color={EFFORT_COLOR[ev.level]}>{cap(ev.level)}</Text>
+              <Text bold color={EFFORT_COLOR[ev.level]}>{ev.model ? `${cap(ev.model)} · ` : ''}{cap(ev.level)}</Text>
               <Box marginLeft={1} flexShrink={1}>
                 <Text dimColor>{!ev.isAuto ? '· set by you' : ev.why && ev.why !== 'auto' ? `· ${ev.why}` : ''}{ev.isSaving ? ' · capped by usage' : ''}</Text>
               </Box>

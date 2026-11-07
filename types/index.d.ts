@@ -14,6 +14,8 @@ export type Run = {
 export type EffortView = {
   /** The level the main loop runs at, or null before the first request. */
   level: string | null
+  /** The model the main loop runs on (a pick, or the chat's own), null before the first request. */
+  model?: string | null
   /** Why the judge picked it ("kept" for a follow-up). */
   why: string
   /** False once the person set effort themselves, or effort: off. */
