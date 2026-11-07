@@ -10,13 +10,6 @@ import {
   PREAMBLE,
   STOPS,
   asked,
-  checkAge,
-  checkLife,
-  groupChecks,
-  liveChecks,
-  loadChecks,
-  mergeChecks,
-  SHOWN_CHECKS,
   fit,
   EFFORTS,
   cap,
@@ -28,6 +21,7 @@ import {
   MODEL_NAMES,
   type Effort,
 } from './judges'
+import { checkAge, checkLife, createChecks, shownChecks, type Host as ChecksHost } from './checks'
 import { BAND_ITEMS, createOrders, type BandItem, type FileStore, type Settings } from './orders'
 import { createPicks, type Host } from './picks'
 
@@ -66,11 +60,10 @@ const log = atom({ plugin: 'standing-orders', key: 'log' } as const, [] as LogEn
 const orders = createOrders()
 // The effort of a turn, the model of a new chat and a subagent's model and effort, and what they remember.
 const picks = createPicks(() => orders.get())
+// The Needs you list: its load, its changes (each saved with the list), its expiry and what the pane shows of it.
+const needsYou = createChecks()
 
 const ctx = {
-  cwd: '',
-  // ponytail: a chat is one load of the mod (a /clear or reload starts a new one); its items are replaced together.
-  chat: '',
   turnStartedAt: 0,
   composerAt: 0,
   isTicking: false,
@@ -118,6 +111,14 @@ const pickHost = ($: EngineInterface): Host => ({
   toast: text => $.ui.toast(text),
 })
 
+// The checks module's engine: the checks atom and the store it is saved in.
+const checkHost = ($: EngineInterface): ChecksHost => ({
+  list: () => read($, checks),
+  change: next => update($, checks, next),
+  load: key => $.store.get(key),
+  save: (key, list) => $.store.set(key, list),
+})
+
 // The orders module's file store: the engine's `$.fs`, which can only be called, never passed.
 const files = ($: EngineInterface): FileStore => ({
   read: path => $.fs.read(path),
@@ -134,10 +135,6 @@ const effortChoice = () => (!orders.mine().isEffortAuto ? 'off' : (orders.mine()
 async function chooseEffort($: EngineInterface, choice: string) {
   await writeSetting($, { effort: choice })
   await picks.setAuto(pickHost($), choice !== 'off')
-}
-async function setChecks($: EngineInterface, next: (old: Check[]) => Check[]) {
-  const list = await update($, checks, next)
-  await $.store.set(`checks:${ctx.cwd}`, list)
 }
 // A tab is named only to land on it; a plain open keeps the one the person left.
 const openPane = async ($: EngineInterface, t?: 'now' | 'settings') => {
@@ -170,15 +167,6 @@ async function reloadOrders($: EngineInterface, force = false) {
   if (await orders.refresh(files($), force)) await applyOrders($)
 }
 
-async function addChecks($: EngineInterface, found: readonly unknown[] | undefined, resolved: readonly unknown[] | undefined) {
-  const strings = (l: readonly unknown[] | undefined) => (Array.isArray(l) ? l.map(c => String(c)) : [])
-  const fresh = strings(found)
-  const done = strings(resolved)
-  if (!fresh.length && !done.length) return
-  const now = await $.clock.now()
-  await setChecks($, old => mergeChecks(old, fresh, done, ctx.chat, now))
-}
-
 async function wait($: EngineInterface, decision: string) {
   await update($, run, s => ({ ...s, pending: decision }))
   await note($, 'asked', decision)
@@ -206,7 +194,7 @@ async function judge($: EngineInterface, answer: string, durationMs: number) {
   })
   const v = r.isAnswered ? parseVerdict(r.text) : null
   if (!v) return
-  await addChecks($, v.checks, v.resolved)
+  await needsYou.add(checkHost($), v.checks, v.resolved, await $.clock.now())
   if (ctx.composerAt > judgedAt) return // the person took over meanwhile
 
   const state = await read($, run)
@@ -267,8 +255,7 @@ async function tick($: EngineInterface) {
   // Orders written since the last load (by Claude, an editor, the Write them button) take effect now.
   await reloadOrders($)
 
-  const open = await read($, checks)
-  if (liveChecks(open, now).length !== open.length) await setChecks($, old => liveChecks(old, now))
+  await needsYou.expire(checkHost($), now)
   // A finished subagent's effort is no longer needed.
   picks.prune(agents)
 }
@@ -292,13 +279,10 @@ export const register: Register = on => {
     })
     await $.command.register({ name: 'autopilot', description: 'What needs you, what the orders did and picked, and the settings' })
     await $.command.register({ name: 'crew', description: 'Old name of /autopilot' })
-    ctx.cwd = e.cwd
     orders.locate({ cwd: e.cwd, globalPath: `${(await $.env.get('HOME')) ?? ''}/.claude/standing-orders.md` })
     await reloadOrders($, true)
     const startedAt = await $.clock.now()
-    ctx.chat = String(startedAt)
-    const saved = await $.store.get(`checks:${ctx.cwd}`).catch(() => null)
-    await update($, checks, () => loadChecks(saved, startedAt))
+    await needsYou.load(checkHost($), { cwd: e.cwd, now: startedAt })
     if (!ctx.isTicking) {
       ctx.isTicking = true
       $.clock.every(5000, () => void tick($).catch(() => {}))
@@ -460,7 +444,7 @@ export const register: Register = on => {
     }
     // Kept working, no longer documented: /autopilot covers both.
     if (arg === 'clear') {
-      await setChecks($, () => [])
+      await needsYou.clear(checkHost($))
       return { text: 'Checks cleared.' }
     }
     if (arg === 'checks') {
@@ -735,8 +719,7 @@ export const register: Register = on => {
     }
 
     // ---- Now ---------------------------------------------------------------
-    const newest = [...list].reverse()
-    const shown = isOpen ? newest : newest.slice(0, SHOWN_CHECKS)
+    const { groups, older } = shownChecks(list, isOpen)
     const recent = [...entries].reverse().slice(0, 8)
     const left = v.lastResponseAt ? v.cacheTtlMin * 60_000 - (v.now - v.lastResponseAt) : null
     // [name, colour, percent, text]
@@ -789,24 +772,22 @@ export const register: Register = on => {
                 <Text dimColor>  Claude is waiting on this. Answer in the prompt.</Text>
               </Box>
             )}
-            {s.pending && shown.length > 0 && <Text dimColor>Only you can check:</Text>}
-            {groupChecks(shown).map((g, gi) => (
+            {s.pending && groups.length > 0 && <Text dimColor>Only you can check:</Text>}
+            {groups.map((g, gi) => (
               <Box key={`grp${gi}-${g.lead ?? ''}`} flexDirection="column" marginTop={gi > 0 || s.pending ? 1 : 0}>
                 {g.lead && (
                   <Box justifyContent="space-between">
                     <Text bold>{g.lead} <Text dimColor>· {g.items.length}</Text></Text>
-                    <Button key={`all${gi}`} dimColor label="Done all" hover={{ scope: `all-${gi}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => !g.items.some(y => y.item.at === x.at && y.item.text === x.text)))} />
+                    <Button key={`all${gi}`} dimColor label="Done all" hover={{ scope: `all-${gi}`, color: 'green' }} onPress={() => needsYou.tickOffGroup(checkHost($), g)} />
                   </Box>
                 )}
                 {g.items.map(({ item: c, text }) => {
-                  const id = `${c.at}:${c.text}`
                   const age = v.now - c.at
                   const life = checkLife(age)
-                  const isNewest = c === shown[0]
-                  // unique per item: checks found in one turn share a timestamp, and a shared scope lights them together
-                  const n = shown.indexOf(c)
-                  const done = <Button key={`tick${id}`} label="✓ Done" /* a scope is capped at 64 characters and shared by equal strings: build it from the position, not text or time */ hover={{ scope: `done-${n}`, color: 'green' }} onPress={() => setChecks($, old => old.filter(x => x.at !== c.at || x.text !== c.text))} />
-                  const ask = <Button key={`ask${id}`} dimColor label="↳ Ask" hover={{ scope: `ask-${n}`, color: 'cyan' }} onPress={() => void $.prompt.fill({ text: `About this check: ${c.text}`, mode: 'replace' })} />
+                  const isNewest = c.slot === 0
+                  // a hover scope is unique per item: checks found in one turn share a timestamp, and a shared scope lights them together
+                  const done = <Button key={`tick${c.id}`} label="✓ Done" /* a scope is capped at 64 characters and shared by equal strings: build it from the position, not text or time */ hover={{ scope: `done-${c.slot}`, color: 'green' }} onPress={() => needsYou.tickOff(checkHost($), c.id)} />
+                  const ask = <Button key={`ask${c.id}`} dimColor label="↳ Ask" hover={{ scope: `ask-${c.slot}`, color: 'cyan' }} onPress={() => void $.prompt.fill({ text: `About this check: ${c.text}`, mode: 'replace' })} />
                   const line = isNewest && isFresh(c.at) ? (
                     <Client key={`flash-check-${c.at}`} module="./motion.tsx" width="100%" props={{ kind: 'flash', head: '', body: `${text} · ${checkAge(age)}` }} />
                   ) : (
@@ -814,13 +795,13 @@ export const register: Register = on => {
                   )
                   // Wide: one row. Narrow: the text gets the full width, its buttons sit under it.
                   return width >= 80 ? (
-                    <Box key={`check${id}`} gap={1} paddingLeft={g.lead ? 2 : 0}>
+                    <Box key={`check${c.id}`} gap={1} paddingLeft={g.lead ? 2 : 0}>
                       {done}
                       <Box flexShrink={1} flexGrow={1}>{line}</Box>
                       {ask}
                     </Box>
                   ) : (
-                    <Box key={`check${id}`} flexDirection="column" paddingLeft={g.lead ? 2 : 0} marginTop={1}>
+                    <Box key={`check${c.id}`} flexDirection="column" paddingLeft={g.lead ? 2 : 0} marginTop={1}>
                       {line}
                       <Box gap={2}>{done}{ask}</Box>
                     </Box>
@@ -828,11 +809,11 @@ export const register: Register = on => {
                 })}
               </Box>
             ))}
-            {list.length > SHOWN_CHECKS && (
-              <Button key="older" label={isOpen ? 'Show fewer' : `+${list.length - SHOWN_CHECKS} older`} onPress={() => update($, isChecksOpen, o => !o)} />
+            {older > 0 && (
+              <Button key="older" label={isOpen ? 'Show fewer' : `+${older} older`} onPress={() => update($, isChecksOpen, o => !o)} />
             )}
           </Box>,
-          { hot: true, right: list.length > 1 ? <Button key="clear" label="Clear all" onPress={() => setChecks($, () => [])} /> : undefined },
+          { hot: true, right: list.length > 1 ? <Button key="clear" label="Clear all" onPress={() => needsYou.clear(checkHost($))} /> : undefined },
         ) : (
           <Text color="green">✓ Nothing needs you</Text>
         )}
