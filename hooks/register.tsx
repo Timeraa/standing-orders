@@ -6,9 +6,7 @@ import {
   HELP,
   INIT_PROMPT,
   REPO_ORDERS,
-  EFFORT_JUDGE,
   JUDGE,
-  MODEL_JUDGE,
   PREAMBLE,
   STOPS,
   asked,
@@ -21,26 +19,17 @@ import {
   SHOWN_CHECKS,
   fit,
   EFFORTS,
-  SUBAGENT_JUDGE,
-  capEffort,
-  clampEffort,
-  parseSubagent,
-  subagentModels,
+  cap,
   clock,
-  isFollowUp,
   isPick,
   logBody,
   logHead,
-  parseEffort,
-  parseModel,
   parseVerdict,
-  pickText,
-  takesEffort,
   MODEL_NAMES,
   type Effort,
-  type ModelName,
 } from './judges'
 import { BAND_ITEMS, createOrders, type BandItem, type FileStore, type Settings } from './orders'
+import { createPicks, type Host } from './picks'
 
 const NAME = 'standing-orders'
 const PANE = 'autopilot'
@@ -75,6 +64,8 @@ const log = atom({ plugin: 'standing-orders', key: 'log' } as const, [] as LogEn
 // ponytail: one session per process, so module-level context is enough.
 // The standing-orders files: orders.get() is what the mod obeys, orders.mine() the person's own file.
 const orders = createOrders()
+// The effort of a turn, the model of a new chat and a subagent's model and effort, and what they remember.
+const picks = createPicks(() => orders.get())
 
 const ctx = {
   cwd: '',
@@ -82,19 +73,7 @@ const ctx = {
   chat: '',
   turnStartedAt: 0,
   composerAt: 0,
-  lastAnswerTail: '',
-  // effort
-  effortJob: null as Promise<{ effort: Effort; why: string } | null> | null,
-  turnEffort: null as Effort | null,
-  lastBase: undefined as unknown,
-  lastApplied: undefined as unknown,
   isTicking: false,
-  // model: chosen once, for a chat with no history
-  isModelChecked: false,
-  modelJob: null as Promise<{ model: ModelName; why: string } | null> | null,
-  chatModel: null as { base: string; id: string } | null,
-  // subagents: the effort picked at spawn, by agent id
-  agentEffort: new Map<string, Effort>(),
 }
 
 // A turn this long that ends without a question still tells the person.
@@ -123,12 +102,21 @@ async function setMode($: EngineInterface, m: 'draft' | 'auto') {
   await update($, mode, () => m)
   await update($, isPaused, () => false)
 }
-async function setEffortAuto($: EngineInterface, isAuto: boolean) {
-  await update($, effort, v => ({ ...v, isAuto, why: isAuto ? 'auto' : 'yours' }))
-  if (!isAuto) ctx.turnEffort = null
-}
-const tally = ($: EngineInterface, kind: 'effort' | 'models', key: string) =>
-  update($, counts, c => ({ ...c, [kind]: { ...c[kind], [key]: (c[kind][key] ?? 0) + 1 } }))
+
+// The picks module's engine: the model, the clock, the effort atom and where picks are recorded.
+const pickHost = ($: EngineInterface): Host => ({
+  complete: req => $.model.complete(req),
+  sleep: ms => $.clock.sleep(ms),
+  view: () => read($, effort),
+  show: patch => update($, effort, v => ({ ...v, ...patch })),
+  contextPercent: async () => (await read($, vitals)).contextPercent,
+  note: (kind, text) => note($, kind, text),
+  tally: (kind, key = '') =>
+    kind === 'subagents'
+      ? update($, counts, c => ({ ...c, subagents: c.subagents + 1 }))
+      : update($, counts, c => ({ ...c, [kind]: { ...c[kind], [key]: (c[kind][key] ?? 0) + 1 } })),
+  toast: text => $.ui.toast(text),
+})
 
 // The orders module's file store: the engine's `$.fs`, which can only be called, never passed.
 const files = ($: EngineInterface): FileStore => ({
@@ -145,7 +133,7 @@ const EFFORT_CHOICES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'off'] 
 const effortChoice = () => (!orders.mine().isEffortAuto ? 'off' : (orders.mine().effortFixed ?? 'auto'))
 async function chooseEffort($: EngineInterface, choice: string) {
   await writeSetting($, { effort: choice })
-  await setEffortAuto($, choice !== 'off')
+  await picks.setAuto(pickHost($), choice !== 'off')
 }
 async function setChecks($: EngineInterface, next: (old: Check[]) => Check[]) {
   const list = await update($, checks, next)
@@ -174,7 +162,7 @@ const cycle = async ($: EngineInterface) => {
 // redraws the Settings tab after a click, so every load comes through here.
 async function applyOrders($: EngineInterface) {
   await update($, vitals, v => ({ ...v, hasRepoOrders: orders.hasRepo(), cacheTtlMin: orders.get().cacheTtlMin }))
-  if (!orders.get().isEffortAuto) await update($, effort, v => ({ ...v, isAuto: false }))
+  await picks.followOrders(pickHost($))
 }
 
 // Re-reads the files; applies them when they changed (always, with `force`).
@@ -257,65 +245,6 @@ async function judge($: EngineInterface, answer: string, durationMs: number) {
   await $.ui.notify(reply, { title: 'Answer drafted from your orders: Enter sends it, or type your own' })
 }
 
-// ---- effort -------------------------------------------------------------
-
-async function judgeEffort($: EngineInterface, text: string) {
-  const r = await $.model.complete({
-    model: 'haiku',
-    system: EFFORT_JUDGE,
-    prompt: `END OF THE AGENT'S PREVIOUS MESSAGE:\n${ctx.lastAnswerTail || '(none: first message)'}\n\nTHE USER'S MESSAGE:\n${text.slice(0, 3000)}`,
-    maxTokens: 80,
-    timeoutMs: 8000,
-  })
-  return r.isAnswered ? parseEffort(r.text) : null
-}
-
-async function pickEffort($: EngineInterface): Promise<void> {
-  const job = ctx.effortJob
-  if (!job) return
-  ctx.effortJob = null
-  const timeout = $.clock.sleep(3000).then(() => null)
-  const picked = await Promise.race([job, timeout]).catch(() => null)
-  const saving = (await read($, effort)).isSaving
-  if (picked) {
-    const { effortMin, effortMax } = orders.get()
-    const level = clampEffort(picked.effort, effortMin, saving ? capEffort(effortMax, 'medium') : effortMax)
-    ctx.turnEffort = level
-    await update($, effort, v => ({ ...v, why: picked.why, isJudging: false }))
-    await note($, 'effort', pickText(level, picked.why))
-  } else {
-    await update($, effort, v => ({ ...v, why: 'judge slow: kept', isJudging: false }))
-  }
-}
-
-// ---- model: a new chat only ---------------------------------------------
-
-async function judgeModel($: EngineInterface, text: string) {
-  const { models } = orders.get()
-  const r = await $.model.complete({
-    model: 'haiku',
-    system: MODEL_JUDGE,
-    prompt: `ALLOWED MODELS: ${models.join(', ')}\n\nTHE USER'S FIRST MESSAGE:\n${text.slice(0, 3000)}`,
-    maxTokens: 80,
-    timeoutMs: 3000,
-  })
-  return r.isAnswered ? parseModel(r.text, models) : null
-}
-
-// Waits briefly for the first prompt's pick, then pins the chat to it.
-async function pickModel($: EngineInterface, base: string) {
-  const job = ctx.modelJob
-  if (!job) return
-  ctx.modelJob = null
-  const picked = await Promise.race([job, $.clock.sleep(3000).then(() => null)]).catch(() => null)
-  if (!picked || shortModel(base) === picked.model) return
-  // An alias: the engine resolves it to the family's newest model.
-  ctx.chatModel = { base, id: picked.model }
-  void tally($, 'models', picked.model)
-  await note($, 'model', pickText(picked.model, picked.why))
-  $.ui.toast(`Auto model: this chat runs on ${cap(picked.model)} (${picked.why}). /model changes it; /orders model off stops this.`)
-}
-
 // ---- vitals -------------------------------------------------------------
 
 async function tick($: EngineInterface) {
@@ -341,17 +270,11 @@ async function tick($: EngineInterface) {
   const open = await read($, checks)
   if (liveChecks(open, now).length !== open.length) await setChecks($, old => liveChecks(old, now))
   // A finished subagent's effort is no longer needed.
-  const listed = new Map(agents.map(a => [a.id, a.status]))
-  for (const id of ctx.agentEffort.keys()) {
-    const st = listed.get(id)
-    if (st && !['pending', 'running', 'waiting'].includes(st)) ctx.agentEffort.delete(id)
-  }
+  picks.prune(agents)
 }
 
-const shortModel = (m: string) => /(haiku|sonnet|opus|fable)/i.exec(m)?.[1]?.toLowerCase() ?? (m || '?')
 // The next value in a cycle; a value outside it starts over.
 const cycleOf = <T,>(cur: T, list: readonly T[]) => list[(list.indexOf(cur) + 1) % list.length] as T
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 // Meters run green, yellow, red; effort runs cool to hot.
 const heat = (percent: number) => (percent >= 90 ? 'red' : percent >= 70 ? 'yellow' : 'green')
 const EFFORT_COLOR: Record<string, string> = { low: 'green', medium: 'cyan', high: 'magenta', xhigh: 'red' }
@@ -392,18 +315,11 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    if (e.origin.kind === 'composer' && e.turnId === undefined && !ctx.isModelChecked) {
-      // Only the chat's first prompt, only with no history, and never over a /model the person typed.
-      ctx.isModelChecked = true
-      const pct = (await read($, vitals)).contextPercent
-      if (orders.get().isModelAuto && !e.command && (pct === null || pct < 5) && !isFollowUp(e.text)) {
-        ctx.modelJob = judgeModel($, e.text)
-      }
-    }
+    // Only the chat's first prompt picks its model, only with no history, and never over a /model the person typed.
+    if (e.origin.kind === 'composer' && e.turnId === undefined) await picks.firstPrompt(pickHost($), { text: e.text, isCommand: !!e.command })
     if (e.origin.kind === 'composer' && e.command?.name === 'effort') {
       // The person set effort themselves: they win until /orders effort auto.
-      await update($, effort, v => ({ ...v, isAuto: false, why: 'yours' }))
-      ctx.turnEffort = null
+      await picks.setAuto(pickHost($), false)
     } else if (e.origin.kind === 'composer' && !e.command) {
       ctx.composerAt = await $.clock.now()
       const isDraftSent = (await read($, run)).last === e.text.trim()
@@ -416,16 +332,7 @@ export const register: Register = on => {
         )
         if (isDraftSent) ctx.composerAt = 0
         else await reloadOrders($, true)
-
-        const ev = await read($, effort)
-        if (ev.isAuto && !orders.get().effortFixed && !isDraftSent && !isFollowUp(e.text)) {
-          ctx.effortJob = judgeEffort($, e.text)
-          await update($, effort, v => ({ ...v, isJudging: true }))
-        } else if (ev.isAuto && orders.get().effortFixed) {
-          await update($, effort, v => ({ ...v, why: 'fixed' }))
-        } else if (ev.isAuto) {
-          await update($, effort, v => ({ ...v, why: 'kept for a follow-up' }))
-        }
+        await picks.typed(pickHost($), { text: e.text, isDraftSent })
       }
     }
 
@@ -440,36 +347,10 @@ export const register: Register = on => {
 
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined) {
-      const picked = ctx.agentEffort.get(e.agentId)
-      const isSteerable = picked && typeof e.effort === 'string' && takesEffort(e.model)
-      return yield* next(isSteerable ? { ...e, effort: picked } : e)
+      const picked = picks.subagentRequest(e.agentId, e.model, e.effort)
+      return yield* next(picked ? { ...e, effort: picked } : e)
     }
-    // The chat's pick from its first prompt: every main request goes there until the person runs /model.
-    if (e.index === 0) await pickModel($, e.model)
-    if (ctx.chatModel && e.model !== ctx.chatModel.base) ctx.chatModel = null
-    const model = ctx.chatModel?.id ?? e.model
-
-    let ev = await read($, effort)
-    if (e.index === 0) {
-      // The session's own level moved under us: the person changed it.
-      const moved =
-        ctx.lastBase !== undefined && e.effort !== ctx.lastBase && e.effort !== ctx.lastApplied
-      ctx.lastBase = e.effort
-      if (moved && ev.isAuto) {
-        ctx.turnEffort = null
-        ctx.effortJob = null
-        ev = await update($, effort, v => ({ ...v, isAuto: false, isJudging: false, why: 'yours' }))
-        $.ui.toast('You changed effort yourself: auto effort is off. /orders effort auto turns it back on.')
-      }
-      if (ev.isAuto && !orders.get().effortFixed && takesEffort(model)) await pickEffort($)
-    }
-
-    const level = ev.isAuto && takesEffort(model) ? (orders.get().effortFixed ?? ctx.turnEffort) : null
-    if (level) ctx.lastApplied = level
-    if (level && e.index === 0) void tally($, 'effort', level)
-    await update($, effort, v => ({ ...v, model: shortModel(model), level: level ?? (e.effort === undefined ? null : String(e.effort)) }))
-
-    const r = yield* next({ ...e, ...(level ? { effort: level } : {}), ...(ctx.chatModel ? { model } : {}) })
+    const r = yield* next({ ...e, ...(await picks.request(pickHost($), e)) })
     const done = await $.clock.now()
     await update($, vitals, v => ({ ...v, now: done, lastResponseAt: done }))
     return r
@@ -477,40 +358,17 @@ export const register: Register = on => {
 
   on('agent.spawn', async ($, e, next) => {
     const ev = e as unknown as { prompt: string; subagentType: string; fork?: boolean; isTeammate?: boolean; workflow?: unknown; model?: string }
-    if (!orders.get().isSubagentsAuto || ev.fork || ev.isTeammate || ev.workflow) return next(e)
-    const allowed = subagentModels(orders.get().models)
-    const pick = await Promise.race([
-      $.model
-        .complete({
-          model: 'haiku',
-          system: SUBAGENT_JUDGE,
-          prompt: `ALLOWED MODELS: ${allowed.join(', ')}\n\nSUBAGENT TYPE: ${ev.subagentType}\nTASK:\n${String(ev.prompt).slice(0, 2000)}`,
-          maxTokens: 80,
-          timeoutMs: 3000,
-        })
-        .then(r => (r.isAnswered ? parseSubagent(r.text, allowed) : null)),
-      $.clock.sleep(3000).then(() => null),
-    ]).catch(() => null)
-    if (!pick) return next(e)
-    // A model the Agent call already named wins; only the gap is filled.
-    const result = await next(ev.model ? e : ({ ...e, model: pick.model } as typeof e))
-    const id = (result as { agentId?: string }).agentId
-    if (id) {
-      const level = clampEffort(pick.effort, orders.get().effortMin, orders.get().effortMax)
-      ctx.agentEffort.set(id, level)
-      const model = shortModel(String((result as { model?: string }).model ?? pick.model))
-      await update($, counts, c => ({ ...c, subagents: c.subagents + 1 }))
-      void tally($, 'models', model)
-      await note($, 'subagent', pickText(`${model}/${level}`, pick.why))
-    }
-    return result
+    const eligible = !(ev.fork || ev.isTeammate || ev.workflow)
+    return picks.spawn(pickHost($), { eligible, prompt: ev.prompt, subagentType: ev.subagentType, named: ev.model }, model =>
+      next(model ? ({ ...e, model } as typeof e) : e),
+    )
   }).catch(($, e, next) => next(e)) // never block a spawn
 
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId !== undefined) return r
 
-    ctx.lastAnswerTail = e.answer.slice(-800)
+    picks.afterTurn(e.answer)
     const isAnswer = e.reason === 'answer' && !e.isAborted
     if (isAnswer && STOPS.test(e.answer.slice(-1500))) {
       void judge($, e.answer, e.durationMs).catch(err => $.ui.log(`${NAME}: judge failed: ${String(err)}`))

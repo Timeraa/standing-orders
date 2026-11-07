@@ -266,6 +266,8 @@ export const logBody = (e: { kind: keyof typeof MARK; text: string }) =>
 export const logLine = (e: { at: number; kind: keyof typeof MARK; text: string }, now: number) =>
   `${logHead(e, now)}  ${logBody(e)}`
 
+export const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+
 export const fit = (text: string, n: number) =>
   n > 1 && text.length > n ? `${text.slice(0, n - 1)}…` : text
 
