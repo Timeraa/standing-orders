@@ -69,7 +69,9 @@ Sections are bordered cards that light up under the pointer. Motion is calm: a s
 - **Saved by model picks** (measured): every request that ran on a different model than your session would have used (a new chat's pick, a subagent's pick), repriced as the same tokens on your own model. A dearer pick shows as a cost.
 - **Spent on picks and judging** (measured): the autopilot's own Haiku calls (end-of-turn judge, effort, new-chat model and subagent picks).
 - **Net, measured** is the first minus the second. The verdict above the table says in a sentence whether it is saving you or costing you.
-- **Effort** is an estimate and is kept out of that net: lower effort means fewer thinking tokens, but the run that did not happen cannot be measured. The tab shows the measured output tokens of the requests whose effort differed from yours, an assumed output-per-level table, your own average output per level to check it against, and a range (0.5× to 1.5× the estimate). *Net with the estimate* adds it.
+- **Cache rebuilds** (measured): the autopilot may change effort between turns. The tab compares the cache-write tokens of requests right after an effort change with those right after none (cache still warm); any extra writes are priced as a cost and counted in the net. It says "not enough data" until each side has 3 requests.
+- **Effort** cannot be measured from a single run, because the run that did not happen is unknown. Until you turn the **Savings audit** on it is an *assumed estimate* (an output-per-level table printed on the tab, a 0.5×–1.5× range), and the verdict says "Not proven". With the audit on (`audit: on`, a button on the tab), about one turn in five whose effort the autopilot would have set runs at the effort you set yourself instead. The turn is chosen by a hash of its id, unrelated to what you typed, so the two groups are alike; the gap in output tokens per request between them is the effort effect, measured, with a 95% range. Each side needs 10 requests on the same model. Once the whole range is above (or below) zero the verdict says **Proven**. Held turns give up the pick's benefit, which is the price of the proof, so turn the audit off when you have your answer.
+- **Bottom line**: "Without effort" and "With effort", with the 95% range once it is known.
 - Per-route, per-call-kind and per-effort breakdowns, and a "How this is measured" card that lists the assumptions (the model it would have used is your session's own; a subagent is assumed to inherit it; the same token count on the other model).
 
 **Settings** (every click saves to your orders file; each card says which lines of the file it writes)
@@ -116,6 +118,7 @@ model: auto
 models: sonnet, opus
 cache-ttl: 60
 motion: on
+audit: off
 band: mode, answered, effort, ctx, cache, hint, autopilot
 ```
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.0
+- Savings can now prove it. The table reads Saved, Cost, Bottom line, with a verdict that says "Proven" only when its whole 95% range is on one side of zero.
+- New **Savings audit** (`audit: on`, a button on the Savings tab; off by default): about one turn in five whose effort the mod would set runs at your own effort instead, chosen by a hash of the turn id. The difference in output tokens per request between the two groups is the effort effect, measured, with a 95% range. Without it effort stays an assumed estimate and the verdict says "Not proven".
+- New measured cost: **cache rebuilds after effort changes**. Cache-write tokens of requests right after an effort change are compared with those after none, and any extra writes are subtracted in the net.
+
 ## 0.12.0
 - Savings tab in the Autopilot pane (and `/orders savings`): is the autopilot paying for itself? Counts the real tokens of every request and of the mod's own Haiku calls, per day for 90 days, and shows today / 7 days / all time: what model picks saved (the same tokens repriced on the model your session would have used), what the picks and judging cost, the measured net and a one-sentence verdict. Dollars are API-equivalent list prices, so it works on a plan with no bill. The effort effect is shown apart as an estimate with its assumptions and range, and is not in the measured net.
 

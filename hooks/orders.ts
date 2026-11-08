@@ -60,6 +60,8 @@ export type Orders = {
   cacheTtlMin: number
   /** Animations in the band and the pane (a spinner, easing bars, a flash on a new entry). */
   isMotionOn: boolean
+  /** Savings audit: a random share of turns runs at your own effort, so the effort effect can be measured. */
+  isAuditOn: boolean
   /** What the line above the prompt shows. */
   band: BandItem[]
 }
@@ -144,6 +146,7 @@ export function parseOrders(global: string, repo = ''): Orders {
     models: parseModels(setting(global, 'models')),
     cacheTtlMin: num(setting(repo, 'cache-ttl') ?? setting(global, 'cache-ttl'), 60),
     isMotionOn: (setting(global, 'motion') ?? 'on').toLowerCase() !== 'off',
+    isAuditOn: (setting(global, 'audit') ?? 'off').toLowerCase() === 'on',
     band: parseBand(setting(global, 'band')),
   }
 }
@@ -168,6 +171,7 @@ export type SettingKey =
   | 'models'
   | 'cache-ttl'
   | 'motion'
+  | 'audit'
   | 'band'
 export type Settings = Partial<Record<SettingKey, string>>
 

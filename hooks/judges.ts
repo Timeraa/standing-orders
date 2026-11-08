@@ -239,7 +239,8 @@ When to use what:
                                  drops by itself after 3 days)
 - Is it saving money? ......... /autopilot, Savings tab (or /orders savings): tokens
                                  and API-equivalent dollars saved and spent, with a
-                                 verdict. Effort is an estimate, kept apart
+                                 verdict ("Proven" needs the audit: turn it
+                                 on in that tab to measure the effort effect)
 - Change a setting ............ /autopilot, Settings tab: every click saves to
                                  your orders file. /orders setup opens it
 - Buttons for all of this ..... /autopilot (Esc or Close shuts it; /crew is its

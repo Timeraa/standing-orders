@@ -22,7 +22,7 @@ import { BAND_ITEMS, createOrders, type BandItem, type FileStore, type Settings 
 import { createPicks, type Host } from './picks'
 import { IDLE, beforeJudging, decide, drafted, sent, waiting, whenTyped } from './run'
 import {
-  EFFORT_BAND, EFFORT_WEIGHT, EMPTY, JUDGE_NAMES, PERIODS, PRICES, PRICES_AS_OF, dayKey, merge, recordRun, recordSpent, summarize, tok, usd, verdict,
+  AUDIT_MIN, AUDIT_SHARE, CACHE_MIN, isHeld, EFFORT_BAND, EFFORT_WEIGHT, EMPTY, JUDGE_NAMES, PERIODS, PRICES, PRICES_AS_OF, dayKey, merge, recordRun, recordSpent, summarize, tok, usd, verdict,
   type Ledger, type PeriodKey, type Usage,
 } from './stats'
 import { NARROW_BELOW, bandView, effortColor, paneView, paneWidth } from './view'
@@ -75,6 +75,11 @@ const ctx = {
   mainModel: '',
   /** The model a subagent whose model the mod picked would have run on (a few bytes per spawn). */
   agentBase: new Map<string, string>(),
+  /** The audit's arm for the turn being run: held turns run at the session's own effort. */
+  arm: undefined as 'auto' | 'held' | undefined,
+  /** The effort and end time of the chat's previous request: did this one change effort while the cache was warm? */
+  prevEffort: undefined as string | undefined,
+  prevAt: 0,
 }
 // This session's slice of the stats, saved under its own store key so two sessions never overwrite each other.
 const stat = { mine: EMPTY as Ledger, key: '' }
@@ -145,7 +150,7 @@ async function loadStats($: EngineInterface, now: number) {
 }
 
 // A request of the chat or a subagent: what it ran on and at, against what the session itself had set.
-const runStat = ($: EngineInterface, r: { who: 'chat' | 'agent'; usage: (Usage & { model: string }) | null | undefined; wouldModel?: string; ranEffort?: unknown; wouldEffort?: unknown }) =>
+const runStat = ($: EngineInterface, r: { who: 'chat' | 'agent'; usage: (Usage & { model: string }) | null | undefined; wouldModel?: string; ranEffort?: unknown; wouldEffort?: unknown; arm?: 'auto' | 'held' | undefined; switched?: boolean | undefined }) =>
   r.usage ? bump($, (l, d) => recordRun(l, d, { ...r, usage: r.usage! })) : Promise.resolve()
 
 const setPaused = ($: EngineInterface, paused: boolean) => update($, isPaused, () => paused)
@@ -396,10 +401,26 @@ export const register: Register = on => {
       void runStat($, { who: 'agent', usage: r.usage, ...(ctx.agentBase.has(e.agentId) ? { wouldModel: ctx.agentBase.get(e.agentId)! } : {}), ranEffort: picked ?? e.effort, wouldEffort: e.effort })
       return r
     }
-    const pick = await picks.request(pickHost($), e)
+    const picked = await picks.request(pickHost($), e)
     ctx.mainModel = e.model
+    // Savings audit: a random share of turns whose effort the mod would have set runs at the session's own, so the two groups can be compared.
+    if (e.index === 0) ctx.arm = undefined
+    if (orders.get().isAuditOn && picked.effort) {
+      if (e.index === 0) ctx.arm = isHeld(e.turnId) ? 'held' : 'auto'
+    } else if (!orders.get().isAuditOn) {
+      ctx.arm = undefined
+    }
+    const pick = { ...picked }
+    if (ctx.arm === 'held') delete pick.effort
+    const ranEffort = pick.effort ?? e.effort
+    const startedAt = await $.clock.now()
+    // Did this request change effort from the last one while the prompt cache was still warm?
+    const warm = ctx.prevAt > 0 && startedAt - ctx.prevAt < orders.get().cacheTtlMin * 60_000
+    const switched = warm && typeof ranEffort === 'string' && ctx.prevEffort !== undefined ? ranEffort !== ctx.prevEffort : undefined
     const r = yield* next({ ...e, ...pick })
-    void runStat($, { who: 'chat', usage: r.usage, wouldModel: e.model, ranEffort: pick.effort ?? e.effort, wouldEffort: e.effort })
+    if (typeof ranEffort === 'string') ctx.prevEffort = ranEffort
+    ctx.prevAt = await $.clock.now()
+    void runStat($, { who: 'chat', usage: r.usage, wouldModel: e.model, ranEffort, wouldEffort: e.effort, arm: ctx.arm, switched })
     const done = await $.clock.now()
     await update($, vitals, v => ({ ...v, now: done, lastResponseAt: done }))
     return r
@@ -672,6 +693,7 @@ export const register: Register = on => {
       const sum = summarize(ledger, dayKey(now), period)
       const wide = paneWidth(e.props.bodyColumns) >= NARROW_BELOW
       const sel = sum.totals[period]
+      const mine = orders.mine()
       const pick = PERIODS.find(x => x.key === period)!
       const row = (label: string, value: string, o: { bold?: boolean; dim?: boolean; color?: string } = {}) => (
         <Box key={`row-${label}`} justifyContent="space-between" gap={2}>
@@ -683,7 +705,7 @@ export const register: Register = on => {
       // One table, a column per period on a wide pane; the chosen period alone on a narrow one.
       const cols = wide ? PERIODS : [pick]
       // `toks` is the tokens behind the row; a single column has room to show them beside the dollars.
-      const line = (label: string, f: (x: typeof sel) => number, o: { bold?: boolean; dim?: boolean; plain?: boolean; toks?: (x: typeof sel) => number } = {}) => (
+      const line = (label: string, f: (x: typeof sel) => number, o: { bold?: boolean; dim?: boolean; plain?: boolean; toks?: (x: typeof sel) => number; zero?: (x: typeof sel) => string } = {}) => (
         <Box key={`line-${label}`} gap={1}>
           <Box flexGrow={1} flexShrink={1}><Text bold={o.bold} dimColor={o.dim}>{label}</Text></Box>
           {cols.map(c => {
@@ -693,7 +715,7 @@ export const register: Register = on => {
             return (
               <Box key={`${label}-${c.key}`} width={wide ? 11 : undefined} justifyContent="flex-end" gap={1}>
                 {!wide && t > 0 && <Text dimColor>{tok(t)} tok</Text>}
-                {n === 0 ? <Text dimColor>none yet</Text> : <Text bold={o.bold} dimColor={o.dim} color={o.plain ? undefined : tone(n)}>{usd(n, !o.plain)}</Text>}
+                {n === 0 ? <Text dimColor>{o.zero?.(x) ?? 'none yet'}</Text> : <Text bold={o.bold} dimColor={o.dim} color={o.plain ? undefined : tone(n)}>{usd(n, !o.plain)}</Text>}
               </Box>
             )
           })}
@@ -709,7 +731,6 @@ export const register: Register = on => {
       )
       const who = (w: string) => (w === 'agent' ? 'Subagents' : 'Your chat')
       const [lo, hi] = EFFORT_BAND
-      const eff = sel.effortUsd
       return (
         <Box flexDirection="column" gap={1}>
           {tabs}
@@ -725,7 +746,7 @@ export const register: Register = on => {
           </Box>
 
           {card(
-            'verdict', 'Is it paying for itself?', sel.net >= 0 && sel.requests > 0 ? 'green' : 'yellow',
+            'verdict', 'Is it paying for itself?', sel.proof === 'saving' ? 'green' : sel.proof === 'costing' ? 'red' : 'yellow',
             <Box flexDirection="column">
               <Text bold>{verdict(sel)}</Text>
               <Text dimColor>
@@ -742,16 +763,48 @@ export const register: Register = on => {
               {head}
               <Text bold>Saved</Text>
               {line('  Model picks (measured)', x => x.saved.usd, { toks: x => x.saved.tokens })}
-              {line('  Effort (estimate)', x => x.effortUsd.point)}
+              {line(`  Effort (${sel.effortSource === 'audit' ? 'measured by the audit' : 'assumed estimate'})`, x => x.effort.point, { dim: sel.effortSource !== 'audit' })}
               <Text bold>Cost</Text>
-              {line('  Autopilot\'s own Haiku calls (measured)', x => -x.spent.usd, { toks: x => x.spent.tokens })}
+              {line('  Autopilot\'s own Haiku calls', x => -x.spent.usd, { toks: x => x.spent.tokens })}
+              {line('  Cache rebuilds after effort changes', x => -x.cache.usd, { zero: x => (x.cache.enough ? '$0.00' : 'not enough data') })}
               <Text bold>Bottom line</Text>
-              {line('  Measured only', x => x.net)}
-              {line('  With the effort estimate', x => x.netWithEffort, { bold: true })}
-              <Text dimColor>
-                {`${pick.label} in tokens: ${tok(sel.saved.tokens)} moved to a cheaper model · ${tok(sel.spent.tokens)} spent on the autopilot's own Haiku calls.`}
-              </Text>
+              {line('  Without effort', x => x.net)}
+              {line('  With effort', x => x.total, { bold: true })}
+              {sel.totalRange && <Text dimColor>{`95% range for the bottom line: ${usd(sel.totalRange.low, true)} to ${usd(sel.totalRange.high, true)}`}</Text>}
               {sel.unpriced > 0 && <Text color="yellow">{`${sel.unpriced} request(s) ran on a model without a price here and are left out of the dollars.`}</Text>}
+            </Box>,
+          )}
+
+          {card(
+            'audit', 'Savings audit: proves the effort effect', mine.isAuditOn ? 'green' : 'yellow',
+            <Box flexDirection="column">
+              <Box justifyContent="space-between">
+                <Text bold>{mine.isAuditOn ? `On: about ${Math.round(AUDIT_SHARE * 100)}% of turns run at your own effort` : 'Off'}</Text>
+                <Button key="audit" label={mine.isAuditOn ? 'Turn off' : 'Turn on'} onPress={() => writeSetting($, { audit: mine.isAuditOn ? 'off' : 'on' })} />
+              </Box>
+              <Text dimColor>Nobody can measure the turn that did not happen. The audit makes it happen: a random one in five turns skips the autopilot's effort pick and runs at the effort you set yourself. Random choice makes both groups alike, so the gap in output tokens per request is the effort effect, measured, with a 95% range. Those held turns cost you the pick's benefit, which is the price of the proof; turn it off once the verdict is proven.</Text>
+              {sel.audit.ready ? (
+                sel.audit.rows.map(r => (
+                  <Box key={`audit-${r.model}`} flexDirection="column" marginTop={1}>
+                    {row(`${r.model}: auto ${tok(r.meanAuto)} vs your own ${tok(r.meanHeld)} output per request`, `${usd(r.usd, true)} ± ${usd(r.half)}`, { bold: true, color: tone(r.usd) })}
+                    <Text dimColor>{`${r.nAuto} auto and ${r.nHeld} held requests`}</Text>
+                  </Box>
+                ))
+              ) : (
+                <Text>{`Collected so far (${pick.label.toLowerCase()}): ${sel.audit.seen.auto} auto, ${sel.audit.seen.held} held requests. Each side needs ${AUDIT_MIN} on the same model before it says anything.`}</Text>
+              )}
+            </Box>,
+          )}
+
+          {card(
+            'cachecheck', 'Does changing effort rebuild the prompt cache?', 'magenta',
+            <Box flexDirection="column">
+              <Text dimColor>The autopilot may change effort between turns. If that makes Claude Code rewrite the cached conversation, it costs far more than it saves. This compares cache writes right after a change with right after none (cache still warm).</Text>
+              {sel.cache.enough ? (
+                <Text>{`After a change: ${sel.cache.changed} requests wrote ${(sel.cache.writeChanged * 100).toFixed(1)}% of their input to the cache. After none: ${sel.cache.same} requests wrote ${(sel.cache.writeSame * 100).toFixed(1)}%. Extra cost measured: ${usd(sel.cache.usd)}.`}</Text>
+              ) : (
+                <Text>{`Not enough yet: ${sel.cache.changed} after a change, ${sel.cache.same} after none; each needs ${CACHE_MIN}.`}</Text>
+              )}
             </Box>,
           )}
 
@@ -791,7 +844,7 @@ export const register: Register = on => {
           )}
 
           {card(
-            'effort', 'Effort (an estimate, kept out of the net)', 'yellow',
+            'effort', 'Effort: the assumed estimate (used until the audit has data)', 'yellow',
             <Box flexDirection="column">
               <Text dimColor>Lower effort means fewer thinking tokens, but the run that did not happen cannot be measured. These are requests where auto or fixed effort differed from the level your session had set.</Text>
               {sum.efforts.length === 0 ? (
@@ -805,7 +858,7 @@ export const register: Register = on => {
                     </Box>
                   ))}
                   <Box marginTop={1}>
-                    <Text bold>{`Estimate for ${pick.label.toLowerCase()}: ${usd(eff.point, true)} (${usd(eff.low, true)} to ${usd(eff.high, true)})`}</Text>
+                    <Text bold>{`Assumed estimate for ${pick.label.toLowerCase()}: ${usd(sel.assumed.point, true)} (${usd(sel.assumed.low, true)} to ${usd(sel.assumed.high, true)})`}</Text>
                   </Box>
                 </Box>
               )}

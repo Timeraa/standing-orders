@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { EMPTY, dayKey, merge, recordRun, recordSpent, shortModel, summarize, usd, tok, verdict } from '../hooks/stats'
+import { EMPTY, dayKey, isHeld, merge, recordRun, recordSpent, shortModel, summarize, usd, tok, verdict } from '../hooks/stats'
 import { PANE, engine, settle, step, typed } from './support'
 
 const U = (i: number, o: number, r = 0, w = 0) => ({ input_tokens: i, output_tokens: o, cache_read_input_tokens: r, cache_creation_input_tokens: w })
@@ -22,16 +22,20 @@ test('stats: a cheaper model saves the repriced tokens, the autopilot own calls 
   near(t.spent.usd, 0.0105)
   near(t.net, 2.85 - 0.0105)
   // effort: output 100K at low would have been 100K × 1/0.35 at high, priced at Haiku's output rate
-  near(t.effortUsd.point, ((100_000 / 0.35) - 100_000) * 0.5 / 1e6)
-  near(t.effortUsd.low, t.effortUsd.point * 0.5)
-  near(t.effortUsd.high, t.effortUsd.point * 1.5)
-  near(t.netWithEffort, t.net + t.effortUsd.point)
+  near(t.assumed.point, ((100_000 / 0.35) - 100_000) * 0.5 / 1e6)
+  near(t.assumed.low, t.assumed.point * 0.5)
+  near(t.assumed.high, t.assumed.point * 1.5)
+  near(t.total, t.net + t.assumed.point)
+  expect(t.effortSource).toBe("assumed")
   expect(s.routes).toHaveLength(1)
   expect(s.routes[0]).toMatchObject({ who: 'agent', ran: 'haiku', would: 'sonnet' })
   expect(s.unchanged.n).toBe(1)
   expect(s.judges).toMatchObject([{ kind: 'verdict', n: 1, tokensIn: 100_000, tokensOut: 1000 }])
-  expect(verdict(t)).toContain('Saving you $2.84')
-  expect(verdict(summarize(recordSpent(EMPTY, TODAY, 'effort', U(1_000_000, 0)), TODAY, 'day').totals.day)).toContain('Costing you')
+  // effort differed and no audit measured it: the verdict will not call it proven
+  expect(t.proof).toBe('unproven')
+  expect(verdict(t)).toContain('Not proven')
+  // no effort ever differed: the measured net is the whole story, so a cost is proven
+  expect(summarize(recordSpent(EMPTY, TODAY, 'effort', U(1_000_000, 0)), TODAY, 'day').totals.day.proof).toBe('costing')
 })
 
 test('stats: a dearer pick and a costly judge read as a cost, and the verdict says so', () => {
@@ -41,6 +45,7 @@ test('stats: a dearer pick and a costly judge read as a cost, and the verdict sa
   const t = summarize(l, TODAY, 'day').totals.day
   expect(t.saved.usd).toBeLessThan(0)
   expect(t.net).toBeLessThan(0)
+  expect(verdict(t)).toContain('Proven: costing you')
   expect(verdict(t)).toContain('more than it saves')
   expect(verdict(summarize(EMPTY, TODAY, 'day').totals.day)).toContain('Nothing recorded yet')
 })
@@ -159,6 +164,75 @@ test('stats: when only the effort estimate is positive, the verdict leads with i
   let l = recordRun(EMPTY, TODAY, { who: 'chat', usage: { ...U(1000, 100_000), model: 'claude-sonnet-5-5' }, wouldModel: 'claude-sonnet-5-5', ranEffort: 'low', wouldEffort: 'high' })
   l = recordSpent(l, TODAY, 'effort', U(1000, 50))
   const v = verdict(summarize(l, TODAY, 'day').totals.day)
-  expect(v).toContain('Probably saving you')
-  expect(v).toContain('Measured alone it is −$')
+  expect(v).toContain('Not proven')
+  expect(v).toContain('Measured alone')
+  expect(v).toContain('Turn the audit on')
+})
+
+// The proof: random audit turns at your own effort against the autopilot's, compared with a 95% range.
+const audited = (l: any, arm: 'auto' | 'held', outs: number[]) =>
+  outs.reduce((acc, o) => recordRun(acc, TODAY, { who: 'chat', usage: { ...U(1000, o), model: 'claude-sonnet-5-5' }, wouldModel: 'claude-sonnet-5-5', ranEffort: arm === 'auto' ? 'low' : 'high', wouldEffort: 'high', arm }), l)
+const spread = (mean: number, n: number) => Array.from({ length: n }, (_, i) => mean + (i % 2 ? 100 : -100))
+
+test('stats: the audit proves a saving when the whole range is above zero, and says unproven when it is not', () => {
+  const proven = summarize(audited(audited(EMPTY, 'auto', spread(1000, 30)), 'held', spread(2000, 30)), TODAY, 'day').totals.day
+  expect(proven.audit.ready).toBe(true)
+  expect(proven.effortSource).toBe('audit')
+  near(proven.effort.point, 1000 * 30 * 10 / 1e6) // 1,000 fewer output tokens per request × 30 requests at Sonnet's $10 per million
+  expect(proven.proof).toBe('saving')
+  expect(verdict(proven)).toContain('Proven: saving you $0.30')
+
+  // no real difference: the range straddles zero, so nothing is claimed
+  const flatRes = summarize(audited(audited(EMPTY, 'auto', spread(1000, 30)), 'held', spread(1000, 30)), TODAY, 'day').totals.day
+  expect(flatRes.proof).toBe('unproven')
+  expect(verdict(flatRes)).toContain('Not proven either way yet')
+
+  // too few held requests: the audit says nothing yet
+  const few = summarize(audited(audited(EMPTY, 'auto', spread(1000, 30)), 'held', spread(2000, 4)), TODAY, 'day').totals.day
+  expect(few.audit.ready).toBe(false)
+  expect(few.audit.seen).toEqual({ auto: 30, held: 4 })
+})
+
+test('stats: a cache rebuild after an effort change is measured as a cost, and only with enough requests', () => {
+  const warm = (l: any, switched: boolean, n: number, w: number) =>
+    Array.from({ length: n }).reduce((acc: any) => recordRun(acc, TODAY, { who: 'chat', usage: { ...U(1000, 500, 100_000 - w, w), model: 'claude-sonnet-5-5' }, wouldModel: 'claude-sonnet-5-5', switched }), l)
+  // after a change each request wrote 50K tokens to the cache; after none, 1K
+  const busted = summarize(warm(warm(EMPTY, true, 3, 50_000), false, 3, 1000), TODAY, 'day').totals.day
+  expect(busted.cache.enough).toBe(true)
+  expect(busted.cache.usd).toBeGreaterThan(0.1)
+  expect(busted.net).toBeLessThan(0) // measured, so it is in the net
+  // the same writes either way: nothing to blame on the change
+  const fine = summarize(warm(warm(EMPTY, true, 3, 1000), false, 3, 1000), TODAY, 'day').totals.day
+  expect(fine.cache.usd).toBeLessThan(0.001)
+  // one request each: not enough to say anything
+  expect(summarize(warm(warm(EMPTY, true, 1, 50_000), false, 1, 1000), TODAY, 'day').totals.day.cache.enough).toBe(false)
+})
+
+test('stats: with the audit on, a random share of turns runs at your own effort and is recorded as held', async ($: any, on: any) => {
+  const efforts: unknown[] = []
+  const t = engine(on, {
+    orders: 'effort: auto\naudit: on\nmodel: off\n',
+    repoOrders: 'effort: auto\naudit: on\nmodel: off\n',
+    judge: { effort: 'low', why: 'rename' },
+    state: true,
+    handlers: {
+      'turn.step': async function* (_: unknown, e: any) {
+        efforts.push(e.effort)
+        return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: { ...U(1000, 500), model: e.model } }
+      },
+    },
+  })
+  // two turn ids the assignment puts on either side
+  const ids = Array.from({ length: 50 }, (_, i) => `t${i}`)
+  const held = ids.find(isHeld)!
+  const auto = ids.find(id => !isHeld(id))!
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await typed($, 'Rename a variable', held, 'claude-sonnet-5-5', 'high')
+  await typed($, 'Rename another variable', auto, 'claude-sonnet-5-5', 'high')
+  await settle()
+  expect(efforts).toEqual(['high', 'low']) // held kept the session's own, auto got the pick
+  const saved = (t.stored as any[]).filter(v => v?.ledger).at(-1)
+  const day = saved.ledger.days[dayKey(1000)]
+  expect(day.audit['sonnet|held']).toMatchObject({ n: 1, o: 500 })
+  expect(day.audit['sonnet|auto']).toMatchObject({ n: 1, o: 500 })
 })

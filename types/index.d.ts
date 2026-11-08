@@ -68,12 +68,19 @@ export type LogEntry = {
 /** Tokens of one bucket: requests, uncached input, output, cache reads, cache writes. */
 export type Tok = { n: number; i: number; o: number; r: number; w: number }
 
+/** Requests, output tokens and the sum of their squares: enough to compare two groups with a confidence range. */
+export type Audit = { n: number; o: number; q: number }
+
 /** One day of the stats ledger (see hooks/stats.ts for what each bucket counts). */
 export type Day = {
   spent: Record<string, Tok>
   runs: Record<string, Tok>
   effort: Record<string, Tok>
   levels: Record<string, Tok>
+  /** Chat requests after an effort change, or after none (older records have none). */
+  cache?: Record<string, Tok>
+  /** Audited turns' requests by `model|auto` and `model|held` (older records have none). */
+  audit?: Record<string, Audit>
 }
 
 /** Days by local date (YYYY-MM-DD). */
