@@ -65,6 +65,23 @@ export type LogEntry = {
   text: string
 }
 
+/** Tokens of one bucket: requests, uncached input, output, cache reads, cache writes. */
+export type Tok = { n: number; i: number; o: number; r: number; w: number }
+
+/** One day of the stats ledger (see hooks/stats.ts for what each bucket counts). */
+export type Day = {
+  spent: Record<string, Tok>
+  runs: Record<string, Tok>
+  effort: Record<string, Tok>
+  levels: Record<string, Tok>
+}
+
+/** Days by local date (YYYY-MM-DD). */
+export type Ledger = { days: Record<string, Day> }
+
+/** The Savings tab's period. */
+export type PeriodKey = 'day' | 'week' | 'all'
+
 declare module 'claude-code' {
   interface PluginState {
     'standing-orders': {
@@ -77,11 +94,15 @@ declare module 'claude-code' {
       /** True while the Autopilot pane lists every open check, not just the newest. */
       isChecksOpen: boolean
       /** The Autopilot pane's open tab. */
-      tab: 'now' | 'settings'
+      tab: 'now' | 'settings' | 'savings'
       effort: EffortView
       counts: Counts
       vitals: Vitals
       log: LogEntry[]
+      /** Tokens the autopilot spent and moved, by day (see hooks/stats.ts). */
+      stats: Ledger
+      /** The Savings tab's period. */
+      statsPeriod: PeriodKey
     }
   }
 }

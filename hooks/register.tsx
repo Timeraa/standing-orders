@@ -21,7 +21,11 @@ import { checkAge, createChecks, type Host as ChecksHost } from './checks'
 import { BAND_ITEMS, createOrders, type BandItem, type FileStore, type Settings } from './orders'
 import { createPicks, type Host } from './picks'
 import { IDLE, beforeJudging, decide, drafted, sent, waiting, whenTyped } from './run'
-import { bandView, effortColor, paneView } from './view'
+import {
+  EFFORT_BAND, EFFORT_WEIGHT, EMPTY, JUDGE_NAMES, PERIODS, PRICES, PRICES_AS_OF, dayKey, merge, recordRun, recordSpent, summarize, tok, usd, verdict,
+  type Ledger, type PeriodKey, type Usage,
+} from './stats'
+import { NARROW_BELOW, bandView, effortColor, paneView, paneWidth } from './view'
 
 const NAME = 'standing-orders'
 const PANE = 'autopilot'
@@ -47,7 +51,10 @@ const vitals = atom({ plugin: 'standing-orders', key: 'vitals' } as const, {
   hasRepoOrders: true,
 } as Vitals)
 // The Autopilot pane's open tab.
-const tab = atom({ plugin: 'standing-orders', key: 'tab' } as const, 'now' as 'now' | 'settings')
+const tab = atom({ plugin: 'standing-orders', key: 'tab' } as const, 'now' as 'now' | 'settings' | 'savings')
+// What the autopilot spent and moved, by day (see stats.ts), and the Savings tab's period.
+const statsLedger = atom({ plugin: 'standing-orders', key: 'stats' } as const, EMPTY as Ledger)
+const statsPeriod = atom({ plugin: 'standing-orders', key: 'statsPeriod' } as const, 'week' as PeriodKey)
 // What the mod did this session: counts only, never stored.
 const counts = atom({ plugin: 'standing-orders', key: 'counts' } as const, { effort: {}, models: {}, subagents: 0 } as Counts)
 const log = atom({ plugin: 'standing-orders', key: 'log' } as const, [] as LogEntry[])
@@ -64,7 +71,15 @@ const ctx = {
   turnStartedAt: 0,
   composerAt: 0,
   isTicking: false,
+  /** The session's own model on the chat's last request: what a subagent would have inherited. */
+  mainModel: '',
+  /** The model a subagent whose model the mod picked would have run on (a few bytes per spawn). */
+  agentBase: new Map<string, string>(),
 }
+// This session's slice of the stats, saved under its own store key so two sessions never overwrite each other.
+const stat = { mine: EMPTY as Ledger, key: '' }
+const STATS_ARCHIVE = 'stats:archive'
+const DAY_MS = 86_400_000
 
 // A turn this long that ends without a question still tells the person.
 const LONG_TURN_MS = 180_000
@@ -85,6 +100,54 @@ const note = async ($: EngineInterface, kind: LogEntry['kind'], text: string) =>
     await update($, log, l => [...l, { at, kind, text }].slice(-30))
   } catch {}
 }
+// ---- stats: tokens the autopilot spent and moved --------------------------
+
+// Adds to the atom the pane reads and to this session's saved slice. A lost line must never fail a turn.
+async function bump($: EngineInterface, f: (l: Ledger, date: string) => Ledger) {
+  try {
+    const at = await $.clock.now()
+    const date = dayKey(at)
+    stat.mine = f(stat.mine, date)
+    await update($, statsLedger, l => f(l, date))
+    if (stat.key) void $.store.set(stat.key, { at, ledger: stat.mine }).catch(() => {})
+  } catch {}
+}
+const spend = ($: EngineInterface, kind: string, u: Usage | undefined) => (u ? bump($, (l, d) => recordSpent(l, d, kind, u)) : Promise.resolve())
+type StatRec = { at: number; ledger: Ledger }
+
+// Every session's slice, as one ledger. Slices a day or more old fold into one archive key.
+async function loadStats($: EngineInterface, now: number) {
+  try {
+    const today = dayKey(now)
+    stat.key = `stats:${now}`
+    stat.mine = EMPTY
+    const keys = (await $.store.keys()).filter(k => k.startsWith('stats:'))
+    const recs = await Promise.all(keys.map(async k => [k, (await $.store.get(k)) as StatRec | undefined] as const))
+    let total = EMPTY
+    let archive = EMPTY
+    const stale: string[] = []
+    for (const [k, r] of recs) {
+      if (!r?.ledger?.days) continue
+      total = merge(total, r.ledger, today)
+      if (k === STATS_ARCHIVE) archive = merge(archive, r.ledger)
+      else if (now - r.at > DAY_MS) {
+        archive = merge(archive, r.ledger)
+        stale.push(k)
+      }
+    }
+    // ponytail: two sessions starting in the same second could both write the archive; the later one wins.
+    if (stale.length) {
+      await $.store.set(STATS_ARCHIVE, { at: now, ledger: merge(archive, EMPTY, today) })
+      for (const k of stale) await $.store.delete(k)
+    }
+    await update($, statsLedger, () => total)
+  } catch {}
+}
+
+// A request of the chat or a subagent: what it ran on and at, against what the session itself had set.
+const runStat = ($: EngineInterface, r: { who: 'chat' | 'agent'; usage: (Usage & { model: string }) | null | undefined; wouldModel?: string; ranEffort?: unknown; wouldEffort?: unknown }) =>
+  r.usage ? bump($, (l, d) => recordRun(l, d, { ...r, usage: r.usage! })) : Promise.resolve()
+
 const setPaused = ($: EngineInterface, paused: boolean) => update($, isPaused, () => paused)
 async function setMode($: EngineInterface, m: 'draft' | 'auto') {
   await update($, mode, () => m)
@@ -93,7 +156,11 @@ async function setMode($: EngineInterface, m: 'draft' | 'auto') {
 
 // The picks module's engine: the model, the clock, the effort atom and where picks are recorded.
 const pickHost = ($: EngineInterface): Host => ({
-  complete: req => $.model.complete(req),
+  complete: async ({ kind, ...req }) => {
+    const r = await $.model.complete(req)
+    void spend($, kind, r.usage)
+    return r
+  },
   sleep: ms => $.clock.sleep(ms),
   view: () => read($, effort),
   show: patch => update($, effort, v => ({ ...v, ...patch })),
@@ -132,7 +199,7 @@ async function chooseEffort($: EngineInterface, choice: string) {
   await picks.setAuto(pickHost($), choice !== 'off')
 }
 // A tab is named only to land on it; a plain open keeps the one the person left.
-const openPane = async ($: EngineInterface, t?: 'now' | 'settings') => {
+const openPane = async ($: EngineInterface, t?: 'now' | 'settings' | 'savings') => {
   if (t) await update($, tab, () => t)
   return $.ui.open({ id: PANE, title: 'Autopilot', closeOnEscape: true })
 }
@@ -186,6 +253,7 @@ async function judge($: EngineInterface, answer: string, durationMs: number) {
     maxTokens: 500,
     timeoutMs: 45000,
   })
+  void spend($, 'verdict', r.usage)
   const v = r.isAnswered ? parseVerdict(r.text) : null
   if (!v) return
   await needsYou.add(checkHost($), v.checks, v.resolved, await $.clock.now())
@@ -274,6 +342,7 @@ export const register: Register = on => {
     await reloadOrders($, true)
     const startedAt = await $.clock.now()
     await needsYou.load(checkHost($), { cwd: e.cwd, now: startedAt })
+    await loadStats($, startedAt)
     if (!ctx.isTicking) {
       ctx.isTicking = true
       $.clock.every(5000, () => void tick($).catch(() => {}))
@@ -323,9 +392,14 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined) {
       const picked = picks.subagentRequest(e.agentId, e.model, e.effort)
-      return yield* next(picked ? { ...e, effort: picked } : e)
+      const r = yield* next(picked ? { ...e, effort: picked } : e)
+      void runStat($, { who: 'agent', usage: r.usage, ...(ctx.agentBase.has(e.agentId) ? { wouldModel: ctx.agentBase.get(e.agentId)! } : {}), ranEffort: picked ?? e.effort, wouldEffort: e.effort })
+      return r
     }
-    const r = yield* next({ ...e, ...(await picks.request(pickHost($), e)) })
+    const pick = await picks.request(pickHost($), e)
+    ctx.mainModel = e.model
+    const r = yield* next({ ...e, ...pick })
+    void runStat($, { who: 'chat', usage: r.usage, wouldModel: e.model, ranEffort: pick.effort ?? e.effort, wouldEffort: e.effort })
     const done = await $.clock.now()
     await update($, vitals, v => ({ ...v, now: done, lastResponseAt: done }))
     return r
@@ -334,9 +408,15 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     const ev = e as unknown as { prompt: string; subagentType: string; fork?: boolean; isTeammate?: boolean; workflow?: unknown; model?: string }
     const eligible = !(ev.fork || ev.isTeammate || ev.workflow)
-    return picks.spawn(pickHost($), { eligible, prompt: ev.prompt, subagentType: ev.subagentType, named: ev.model }, model =>
-      next(model ? ({ ...e, model } as typeof e) : e),
-    )
+    let picked = undefined as string | undefined // set inside the run callback
+    const result = await picks.spawn(pickHost($), { eligible, prompt: ev.prompt, subagentType: ev.subagentType, named: ev.model }, model => {
+      picked = model
+      return next(model ? ({ ...e, model } as typeof e) : e)
+    })
+    // Without the mod the subagent would have inherited the session's model.
+    const id = (result as { agentId?: string }).agentId
+    if (id && picked && ctx.mainModel) ctx.agentBase.set(id, ctx.mainModel)
+    return result
   }).catch(($, e, next) => next(e)) // never block a spawn
 
   on('turn.complete', async ($, e, next) => {
@@ -406,6 +486,10 @@ export const register: Register = on => {
       await openPane($, 'settings')
       return { text: 'Autopilot settings opened.' }
     }
+    if (arg === 'savings' || arg === 'stats') {
+      await openPane($, 'savings')
+      return { text: 'Autopilot savings opened.' }
+    }
     if (arg === 'model') {
       if (sub !== 'auto' && sub !== 'off') return { text: 'Usage: /orders model auto|off' }
       const isAuto = sub === 'auto'
@@ -443,7 +527,7 @@ export const register: Register = on => {
       const now = await $.clock.now()
       return { text: list.length ? list.map(c => `- ${c.text} (${checkAge(now - c.at)})`).join('\n') : 'No checks waiting.' }
     }
-    if (arg !== '') return { text: 'Usage: /orders [help | setup | init | auto | draft | on | off | effort auto|off|<level>|min|max | model auto|off]. Details and controls: /autopilot' }
+    if (arg !== '') return { text: 'Usage: /orders [help | setup | savings | init | auto | draft | on | off | effort auto|off|<level>|min|max | model auto|off]. Details and controls: /autopilot' }
     const s = await read($, run)
     const ev = await read($, effort)
     return {
@@ -541,15 +625,15 @@ export const register: Register = on => {
     const ui = $.ui.resolve(e)
     const { Box, Text, Button, Input } = ui
     const Client = clientOf(ui)
-    const [t, v, s, list, paused, m, ev, entries, tl, isOpen, now] = await Promise.all([
+    const [t, v, s, list, paused, m, ev, entries, tl, isOpen, now, ledger, period] = await Promise.all([
       read($, tab), read($, vitals), read($, run), read($, checks),
       read($, isPaused), read($, mode), read($, effort), read($, log), read($, counts), read($, isChecksOpen),
-      $.clock.now(),
+      $.clock.now(), read($, statsLedger), read($, statsPeriod),
     ])
     // The pane body scrolls, so nothing here is squeezed to a height.
     const fx = orders.get().isMotionOn && e.surface === 'terminal'
-    const goTo = (to: 'now' | 'settings') => () => update($, tab, () => to)
-    const tabBtn = (id: 'now' | 'settings', text: string) =>
+    const goTo = (to: 'now' | 'settings' | 'savings') => () => update($, tab, () => to)
+    const tabBtn = (id: 'now' | 'settings' | 'savings', text: string) =>
       t === id ? (
         <Text bold underline color="cyan">{text}</Text>
       ) : (
@@ -559,6 +643,7 @@ export const register: Register = on => {
       <Box justifyContent="space-between">
         <Box gap={2}>
           {tabBtn('now', 'Now')}
+          {tabBtn('savings', 'Savings')}
           {tabBtn('settings', 'Settings')}
         </Box>
         <Button key="close" role="dismiss" dimColor label="✕ Close" onPress={() => closePane($)} />
@@ -582,6 +667,165 @@ export const register: Register = on => {
         {body}
       </Box>
     )
+
+    if (t === 'savings') {
+      const sum = summarize(ledger, dayKey(now), period)
+      const wide = paneWidth(e.props.bodyColumns) >= NARROW_BELOW
+      const sel = sum.totals[period]
+      const pick = PERIODS.find(x => x.key === period)!
+      const row = (label: string, value: string, o: { bold?: boolean; dim?: boolean; color?: string } = {}) => (
+        <Box key={`row-${label}`} justifyContent="space-between" gap={2}>
+          <Box flexShrink={1}><Text bold={o.bold} dimColor={o.dim}>{label}</Text></Box>
+          <Box flexShrink={0}><Text bold={o.bold} dimColor={o.dim} color={o.color}>{value}</Text></Box>
+        </Box>
+      )
+      const tone = (n: number) => (n > 0 ? 'green' : n < 0 ? 'red' : undefined)
+      // One table, a column per period on a wide pane; the chosen period alone on a narrow one.
+      const cols = wide ? PERIODS : [pick]
+      const line = (label: string, f: (x: typeof sel) => number, o: { bold?: boolean; dim?: boolean; plain?: boolean } = {}) => (
+        <Box key={`line-${label}`} gap={1}>
+          <Box flexGrow={1} flexShrink={1}><Text bold={o.bold} dimColor={o.dim}>{label}</Text></Box>
+          {cols.map(c => (
+            <Box key={`${label}-${c.key}`} width={11} justifyContent="flex-end">
+              <Text bold={o.bold} dimColor={o.dim} color={o.plain ? undefined : tone(f(sum.totals[c.key]))}>{usd(f(sum.totals[c.key]), !o.plain)}</Text>
+            </Box>
+          ))}
+        </Box>
+      )
+      const head = (
+        <Box gap={1}>
+          <Box flexGrow={1} />
+          {cols.map(c => (
+            <Box key={`h-${c.key}`} width={11} justifyContent="flex-end"><Text dimColor>{c.label}</Text></Box>
+          ))}
+        </Box>
+      )
+      const who = (w: string) => (w === 'agent' ? 'Subagents' : 'Your chat')
+      const [lo, hi] = EFFORT_BAND
+      const eff = sel.effortUsd
+      return (
+        <Box flexDirection="column" gap={1}>
+          {tabs}
+          <Box gap={1} flexWrap="wrap">
+            <Text dimColor>Period</Text>
+            {PERIODS.map(x =>
+              x.key === period ? (
+                <Text key={x.key} bold underline color="cyan">{x.label}</Text>
+              ) : (
+                <Button key={x.key} dimColor label={x.label} onPress={() => update($, statsPeriod, () => x.key)} />
+              ),
+            )}
+          </Box>
+
+          {card(
+            'verdict', 'Is it paying for itself?', sel.net >= 0 && sel.requests > 0 ? 'green' : 'yellow',
+            <Box flexDirection="column">
+              <Text bold>{verdict(sel)}</Text>
+              <Text dimColor>
+                {`${pick.label}: ${sel.requests} request${sel.requests === 1 ? '' : 's'} counted${sum.since ? `, recording since ${sum.since}` : ''}.`}
+                {v.ratePercent !== null ? ` Usage limit used right now: ${Math.round(v.ratePercent)}%.` : ''}
+              </Text>
+              <Text dimColor>On a plan (Max, Ultra) nothing is billed per token, but your usage limit drains in proportion to API list prices, so the dollars below are API-equivalent: the yardstick for how much limit a choice costs or frees.</Text>
+            </Box>,
+          )}
+
+          {card(
+            'table', 'The numbers', 'cyan',
+            <Box flexDirection="column">
+              {head}
+              {line('Saved by model picks', x => x.saved.usd)}
+              {line('Spent on picks and judging', x => -x.spent.usd)}
+              {line('Net, measured', x => x.net, { bold: true })}
+              {line('Effort estimate (not counted)', x => x.effortUsd.point, { dim: true })}
+              {line('Net with the estimate', x => x.netWithEffort)}
+              <Text dimColor>
+                {`${pick.label} in tokens: ${tok(sel.saved.tokens)} moved to a cheaper model · ${tok(sel.spent.tokens)} spent on the autopilot's own Haiku calls.`}
+              </Text>
+              {sel.unpriced > 0 && <Text color="yellow">{`${sel.unpriced} request(s) ran on a model without a price here and are left out of the dollars.`}</Text>}
+            </Box>,
+          )}
+
+          {card(
+            'routes', 'Where model picks saved or cost', 'blue',
+            <Box flexDirection="column">
+              <Text dimColor>Same tokens, priced on the model it ran on against the model your session would have used.</Text>
+              {sum.routes.length === 0 ? (
+                <Text dimColor>No request ran on a different model than your own yet. New-chat and subagent picks show up here.</Text>
+              ) : (
+                sum.routes.map(r => (
+                  <Box key={`${r.who}-${r.ran}-${r.would}`} flexDirection="column" marginTop={1}>
+                    {row(`${who(r.who)}: ${r.ran} instead of ${r.would}`, usd(r.savedUsd, true), { bold: true, color: tone(r.savedUsd) })}
+                    <Text dimColor>{`${r.n} request${r.n === 1 ? '' : 's'} · ${tok(r.tokens)} tokens · ${usd(r.ranUsd)} instead of ${usd(r.wouldUsd)}`}</Text>
+                  </Box>
+                ))
+              )}
+              {sum.unchanged.n > 0 && <Text dimColor>{`${sum.unchanged.n} request${sum.unchanged.n === 1 ? '' : 's'} (${tok(sum.unchanged.tokens)} tokens, ${usd(sum.unchanged.usd)}) ran on your own model: no change.`}</Text>}
+            </Box>,
+          )}
+
+          {card(
+            'cost', 'What the autopilot itself cost', 'magenta',
+            <Box flexDirection="column">
+              <Text dimColor>Its small Haiku calls, priced at Haiku list prices. This is the price of the automation.</Text>
+              {sum.judges.length === 0 ? (
+                <Text dimColor>None yet in this period.</Text>
+              ) : (
+                sum.judges.map(j => (
+                  <Box key={j.kind} flexDirection="column" marginTop={1}>
+                    {row(JUDGE_NAMES[j.kind] ?? j.kind, usd(j.usd))}
+                    <Text dimColor>{`${j.n} call${j.n === 1 ? '' : 's'} · ${tok(j.tokensIn)} in, ${tok(j.tokensOut)} out`}</Text>
+                  </Box>
+                ))
+              )}
+            </Box>,
+          )}
+
+          {card(
+            'effort', 'Effort (an estimate, kept out of the net)', 'yellow',
+            <Box flexDirection="column">
+              <Text dimColor>Lower effort means fewer thinking tokens, but the run that did not happen cannot be measured. These are requests where auto or fixed effort differed from the level your session had set.</Text>
+              {sum.efforts.length === 0 ? (
+                <Text dimColor>Effort ran at your own level so far.</Text>
+              ) : (
+                <Box flexDirection="column">
+                  {sum.efforts.map(x => (
+                    <Box key={`${x.model}-${x.ran}-${x.would}`} flexDirection="column" marginTop={1}>
+                      {row(`${x.model} at ${x.ran} instead of ${x.would}`, usd((x.estUsd), true), { color: tone(x.estUsd) })}
+                      <Text dimColor>{`${x.n} request${x.n === 1 ? '' : 's'} · ${tok(x.outTokens)} output tokens measured`}</Text>
+                    </Box>
+                  ))}
+                  <Box marginTop={1}>
+                    <Text bold>{`Estimate for ${pick.label.toLowerCase()}: ${usd(eff.point, true)} (${usd(eff.low, true)} to ${usd(eff.high, true)})`}</Text>
+                  </Box>
+                </Box>
+              )}
+              {sum.levels.length > 0 && (
+                <Box flexDirection="column" marginTop={1}>
+                  <Text dimColor>Measured: your average output per request at each level (a hard prompt skews this, so read it as a hint):</Text>
+                  <Text>{sum.levels.map(l => `${l.level} ${tok(l.avgOut)} (${l.n})`).join(' · ')}</Text>
+                </Box>
+              )}
+              <Text dimColor>
+                {`Assumed, not measured: output relative to high is ${Object.entries(EFFORT_WEIGHT).map(([k, w]) => `${k} ${w}×`).join(', ')}. The range is ${lo}× to ${hi}× the estimate.`}
+              </Text>
+            </Box>,
+          )}
+
+          {card(
+            'how', 'How this is measured', 'cyan',
+            <Box flexDirection="column">
+              <Text dimColor>• Tokens are exact: the API's own counts for every request and every Haiku call the autopilot makes.</Text>
+              <Text dimColor>• Your default is what the session would have used without the autopilot: its model and its effort on that request (your /model, /effort and settings).</Text>
+              <Text dimColor>• Model saving: the same tokens, priced on the model you would have had. It assumes that model would have used the same number of tokens; a different model may use more or fewer.</Text>
+              <Text dimColor>• Subagents are assumed to have inherited your session's model. A subagent type with its own default model would make the saving slightly generous.</Text>
+              <Text dimColor>• Not measured: your time saved by answered questions, prompt-cache effects, retries.</Text>
+              <Text dimColor>{`• Prices (API list, per million tokens in/out, as of ${PRICES_AS_OF}): ${Object.entries(PRICES).map(([k, p]) => `${k} ${usd(p.in)}/${usd(p.out)}`).join(' · ')}.`}</Text>
+              <Text dimColor>• Kept per day for 90 days on this machine, in the plugin's own store.</Text>
+            </Box>,
+          )}
+        </Box>
+      )
+    }
 
     if (t === 'settings') {
       // The person's own file, so a repo's orders are never written back into it.

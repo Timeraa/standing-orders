@@ -24,11 +24,12 @@ import {
   type ModelName,
 } from './judges'
 import type { Orders } from './orders'
+import { shortModel } from './stats'
 
 // ---- the seam -----------------------------------------------------------
 
 /** One question to the judge model: what `$.model.complete` takes. */
-export type Ask = { model: 'haiku'; system: string; prompt: string; maxTokens: number; timeoutMs: number }
+export type Ask = { kind: 'effort' | 'chat-model' | 'subagent'; model: 'haiku'; system: string; prompt: string; maxTokens: number; timeoutMs: number }
 /** What `$.model.complete` answers; `text` only when `isAnswered`. */
 export type Answer = { isAnswered: boolean; text?: string }
 
@@ -88,8 +89,6 @@ export const boundEffort = (level: Effort, { min, max, saving }: Bounds): Effort
 
 // ---- the record ---------------------------------------------------------
 
-const shortModel = (m: string) => /(haiku|sonnet|opus|fable)/i.exec(m)?.[1]?.toLowerCase() ?? (m || '?')
-
 // What a pick leaves behind: the Activity feed, the session tally and the toasts. Written here and nowhere else.
 const record = {
   /** A judged level reached the turn (a kept go-ahead and a fixed level add no note). */
@@ -142,6 +141,7 @@ export function createPicks(orders: () => Orders) {
     ask(
       host,
       {
+        kind: 'effort',
         system: EFFORT_JUDGE,
         prompt: `END OF THE AGENT'S PREVIOUS MESSAGE:\n${lastAnswerTail || '(none: first message)'}\n\nTHE USER'S MESSAGE:\n${text.slice(0, 3000)}`,
         maxTokens: 80,
@@ -224,6 +224,7 @@ export function createPicks(orders: () => Orders) {
         modelJob = ask(
           host,
           {
+            kind: 'chat-model',
             system: MODEL_JUDGE,
             prompt: `ALLOWED MODELS: ${models.join(', ')}\n\nTHE USER'S FIRST MESSAGE:\n${p.text.slice(0, 3000)}`,
             maxTokens: 80,
@@ -308,6 +309,7 @@ export function createPicks(orders: () => Orders) {
         ask(
           host,
           {
+            kind: 'subagent',
             system: SUBAGENT_JUDGE,
             prompt: `ALLOWED MODELS: ${allowed.join(', ')}\n\nSUBAGENT TYPE: ${a.subagentType}\nTASK:\n${String(a.prompt).slice(0, 2000)}`,
             maxTokens: 80,

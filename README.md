@@ -52,7 +52,7 @@ No other network access. Nothing is sent anywhere else.
 
 ## Use it
 
-The line above the prompt has two buttons: the mode label (`Replies: draft`, `Replies: auto` or `Replies paused`; click to cycle) and **Autopilot** (or **Autopilot · 3 to do** when checks wait), which opens the pane. Its other parts read `effort`, `context`, `usage limit` and `prompt cache` from 80 columns (`ctx`, `limit`, `cache` below that). The pane closes with Esc, its **Close** button, or `/autopilot` again, and has two tabs.
+The line above the prompt has two buttons: the mode label (`Replies: draft`, `Replies: auto` or `Replies paused`; click to cycle) and **Autopilot** (or **Autopilot · 3 to do** when checks wait), which opens the pane. Its other parts read `effort`, `context`, `usage limit` and `prompt cache` from 80 columns (`ctx`, `limit`, `cache` below that). The pane closes with Esc, its **Close** button, or `/autopilot` again, and has three tabs: Now, Savings and Settings.
 
 **Now**
 
@@ -63,6 +63,14 @@ The line above the prompt has two buttons: the mode label (`Replies: draft`, `Re
 - **Usage**: context, usage limit and prompt-cache time left as bars, coloured by how full they are (one text line in a narrow pane), with a line saying what each name means.
 
 Sections are bordered cards that light up under the pointer. Motion is calm: a spinner while the effort is being picked, bars that ease to a new value, and a short highlight on the newest entry. Nothing moves at rest, and it is plain text off the terminal.
+
+**Savings** answers "is the autopilot paying for itself?" with your own numbers, for today, the last 7 days or all time (kept 90 days, on this machine). It counts tokens exactly, from the API's own counts, and prices them at API list prices, so it works on a plan (Max, Ultra) that shows no bill: your usage limit drains in proportion to those prices.
+
+- **Saved by model picks** (measured): every request that ran on a different model than your session would have used (a new chat's pick, a subagent's pick), repriced as the same tokens on your own model. A dearer pick shows as a cost.
+- **Spent on picks and judging** (measured): the autopilot's own Haiku calls (end-of-turn judge, effort, new-chat model and subagent picks).
+- **Net, measured** is the first minus the second. The verdict above the table says in a sentence whether it is saving you or costing you.
+- **Effort** is an estimate and is kept out of that net: lower effort means fewer thinking tokens, but the run that did not happen cannot be measured. The tab shows the measured output tokens of the requests whose effort differed from yours, an assumed output-per-level table, your own average output per level to check it against, and a range (0.5× to 1.5× the estimate). *Net with the estimate* adds it.
+- Per-route, per-call-kind and per-effort breakdowns, and a "How this is measured" card that lists the assumptions (the model it would have used is your session's own; a subagent is assumed to inherit it; the same token count on the other model).
 
 **Settings** (every click saves to your orders file; each card says which lines of the file it writes)
 
@@ -87,6 +95,7 @@ Commands, few on purpose:
 /orders effort min|max <level>                       bound what auto may pick
 /orders model auto|off   pick the model for a brand-new chat
 /orders setup        open the Settings tab
+/orders savings      open the Savings tab
 /autopilot           the pane (/crew is its old name for now)
 ```
 
@@ -146,6 +155,7 @@ After edits: `claude plugin update standing-orders@standing-orders` and restart.
 - `hooks/checks.ts`: the Needs you list (lifecycle, persistence, item identity).
 - `hooks/run.ts`: the autopilot run and the order of the end-of-turn guards.
 - `hooks/view.ts`: what the status line and the pane show, derived once for both.
+- `hooks/stats.ts`: the token ledger, the price table and the Savings tab's numbers (measured saving, spend, the effort estimate).
 - `hooks/judges.ts`: the remaining pure parts (prompts, parsers, log lines). Tested directly.
 - `hooks/register.tsx`: the mod itself (hook wiring, commands, the drawing of the band and pane).
 - `hooks/motion.tsx`: the surface module for the animated bits (spinner, bars, flash); pure drawing, no engine access.

@@ -237,6 +237,9 @@ When to use what:
 - Things only you can check ... /autopilot: click one to tick it off (the newest
                                  show first, "+N older" opens the rest; each
                                  drops by itself after 3 days)
+- Is it saving money? ......... /autopilot, Savings tab (or /orders savings): tokens
+                                 and API-equivalent dollars saved and spent, with a
+                                 verdict. Effort is an estimate, kept apart
 - Change a setting ............ /autopilot, Settings tab: every click saves to
                                  your orders file. /orders setup opens it
 - Buttons for all of this ..... /autopilot (Esc or Close shuts it; /crew is its

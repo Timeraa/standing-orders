@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Savings tab in the Autopilot pane (and `/orders savings`): is the autopilot paying for itself? Counts the real tokens of every request and of the mod's own Haiku calls, per day for 90 days, and shows today / 7 days / all time: what model picks saved (the same tokens repriced on the model your session would have used), what the picks and judging cost, the measured net and a one-sentence verdict. Dollars are API-equivalent list prices, so it works on a plan with no bill. The effort effect is shown apart as an estimate with its assumptions and range, and is not in the measured net.
+
 ## 0.11.0
 - Plainer words: the Now tab opens with a "What is this?" card while it is empty (and `/orders help` starts with the same text), each Settings card says which line of `~/.claude/standing-orders.md` it saves to, the band reads `Replies: draft`, `effort`, `context`, `usage limit` and `prompt cache` (short forms below 80 columns), and the pane explains the mode, Effort, Needs you and the Usage names.
 - The status line shows a waiting question on one line (`⚠ Needs you: first sentence… +2 more`) instead of wrapping the whole text; the Needs you card in the pane wraps the full question.

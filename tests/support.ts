@@ -89,6 +89,8 @@ export function engine(on: any, o: Options = {}): Fake {
       return { value: undefined }
     },
     'store.get': () => ({ value: o.saved }),
+    'store.keys': () => ({ value: [] }),
+    'store.delete': () => ({ value: undefined }),
     'store.set': (_, e) => {
       t.stored.push(e.value)
       return { value: undefined }
