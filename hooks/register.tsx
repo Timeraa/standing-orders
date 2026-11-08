@@ -682,14 +682,21 @@ export const register: Register = on => {
       const tone = (n: number) => (n > 0 ? 'green' : n < 0 ? 'red' : undefined)
       // One table, a column per period on a wide pane; the chosen period alone on a narrow one.
       const cols = wide ? PERIODS : [pick]
-      const line = (label: string, f: (x: typeof sel) => number, o: { bold?: boolean; dim?: boolean; plain?: boolean } = {}) => (
+      // `toks` is the tokens behind the row; a single column has room to show them beside the dollars.
+      const line = (label: string, f: (x: typeof sel) => number, o: { bold?: boolean; dim?: boolean; plain?: boolean; toks?: (x: typeof sel) => number } = {}) => (
         <Box key={`line-${label}`} gap={1}>
           <Box flexGrow={1} flexShrink={1}><Text bold={o.bold} dimColor={o.dim}>{label}</Text></Box>
-          {cols.map(c => (
-            <Box key={`${label}-${c.key}`} width={11} justifyContent="flex-end">
-              <Text bold={o.bold} dimColor={o.dim} color={o.plain ? undefined : tone(f(sum.totals[c.key]))}>{usd(f(sum.totals[c.key]), !o.plain)}</Text>
-            </Box>
-          ))}
+          {cols.map(c => {
+            const x = sum.totals[c.key]
+            const n = f(x)
+            const t = o.toks?.(x) ?? 0
+            return (
+              <Box key={`${label}-${c.key}`} width={wide ? 11 : undefined} justifyContent="flex-end" gap={1}>
+                {!wide && t > 0 && <Text dimColor>{tok(t)} tok</Text>}
+                {n === 0 ? <Text dimColor>none yet</Text> : <Text bold={o.bold} dimColor={o.dim} color={o.plain ? undefined : tone(n)}>{usd(n, !o.plain)}</Text>}
+              </Box>
+            )
+          })}
         </Box>
       )
       const head = (
@@ -733,8 +740,8 @@ export const register: Register = on => {
             'table', 'The numbers', 'cyan',
             <Box flexDirection="column">
               {head}
-              {line('Saved by model picks', x => x.saved.usd)}
-              {line('Spent on picks and judging', x => -x.spent.usd)}
+              {line('Saved by model picks', x => x.saved.usd, { toks: x => x.saved.tokens })}
+              {line('Spent on picks and judging', x => -x.spent.usd, { toks: x => x.spent.tokens })}
               {line('Net, measured', x => x.net, { bold: true })}
               {line('Effort estimate (not counted)', x => x.effortUsd.point, { dim: true })}
               {line('Net with the estimate', x => x.netWithEffort)}
@@ -806,7 +813,7 @@ export const register: Register = on => {
                 </Box>
               )}
               <Text dimColor>
-                {`Assumed, not measured: output relative to high is ${Object.entries(EFFORT_WEIGHT).map(([k, w]) => `${k} ${w}×`).join(', ')}. The range is ${lo}× to ${hi}× the estimate.`}
+                {`Assumed, not measured: output relative to high is ${Object.entries(EFFORT_WEIGHT).map(([k, w]) => `${k} ${w}×`).join(', ')}. The range is ${lo}× to ${hi}× the estimate. It prices output tokens only: cache reads, usually most of your tokens, do not change with effort.`}
               </Text>
             </Box>,
           )}
