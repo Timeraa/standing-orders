@@ -116,3 +116,40 @@ test('stats: the chat, a subagent and the Haiku calls are recorded, saved under 
   expect(await pane.find({ type: 'Button', label: 'Today' })).toBeTruthy()
   await pane.unmount()
 })
+
+// History survives a restart: every session's slice is read back, and slices a day old fold into one archive key.
+test('stats: session start merges every saved slice, folds the old ones into the archive and prunes nothing it should keep', async ($: any, on: any) => {
+  const DAY = 86_400_000
+  const now = 10 * DAY
+  const old = { at: 5 * DAY, ledger: recordSpent(EMPTY, '1970-01-05', 'verdict', U(1_000_000, 0)) }
+  const recent = { at: now - 1000, ledger: recordSpent(EMPTY, '1970-01-11', 'verdict', U(2_000_000, 0)) }
+  const store: Record<string, unknown> = { 'stats:5': old, 'stats:recent': recent }
+  const deleted: string[] = []
+  const t = engine(on, {
+    orders: 'effort: auto\n',
+    state: true,
+    now,
+    handlers: {
+      'store.keys': () => ({ value: Object.keys(store) }),
+      'store.get': (_: unknown, e: any) => ({ value: store[e.key] }),
+      'store.delete': (_: unknown, e: any) => {
+        deleted.push(e.key)
+        return { value: undefined }
+      },
+    },
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await settle()
+
+  expect(deleted).toEqual(['stats:5']) // only the slice a day old is folded away
+  const archive = (t.stored as any[]).find(v => v?.ledger?.days?.['1970-01-05'])
+  expect(Object.keys(archive.ledger.days)).toEqual(['1970-01-05']) // the recent slice stays under its own key
+  // the pane's total counts both slices: $0.10 + $0.20
+  t.set('tab', 'savings')
+  t.set('statsPeriod', 'all')
+  const pane = await $.ui.mount(PANE('desktop'))
+  expect(await pane.find({ type: 'Text', text: /−\$0\.30/ })).toBeTruthy()
+  await pane.unmount()
+  // and the command opens the tab
+  expect((await $.command.run({ command: 'orders', args: 'savings' })).text).toContain('savings')
+})
