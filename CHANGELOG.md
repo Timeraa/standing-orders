@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.11.0
 - Plainer words: the Now tab opens with a "What is this?" card while it is empty (and `/orders help` starts with the same text), each Settings card says which line of `~/.claude/standing-orders.md` it saves to, the band reads `Replies: draft`, `effort`, `context`, `usage limit` and `prompt cache` (short forms below 80 columns), and the pane explains the mode, Effort, Needs you and the Usage names.
 - The status line shows a waiting question on one line (`⚠ Needs you: first sentence… +2 more`) instead of wrapping the whole text; the Needs you card in the pane wraps the full question.
 - Internal: orders, effort/model picks, Needs you checks and the status/pane display logic each live in one module (`hooks/orders.ts`, `picks.ts`, `checks.ts`, `view.ts`); tests share one fake engine.
