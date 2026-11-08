@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.12.0
 - Savings tab in the Autopilot pane (and `/orders savings`): is the autopilot paying for itself? Counts the real tokens of every request and of the mod's own Haiku calls, per day for 90 days, and shows today / 7 days / all time: what model picks saved (the same tokens repriced on the model your session would have used), what the picks and judging cost, the measured net and a one-sentence verdict. Dollars are API-equivalent list prices, so it works on a plan with no bill. The effort effect is shown apart as an estimate with its assumptions and range, and is not in the measured net.
 
 ## 0.11.0
