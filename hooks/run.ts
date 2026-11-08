@@ -102,7 +102,7 @@ export async function decide(f: Flags, isTyping: () => Promise<boolean>): Promis
   if (v.action === 'ask') return { do: 'ask', why: 'judge', text: v.decision || 'Claude is waiting on you.' }
   if (f.railed) return { do: 'ask', why: 'rail', text: v.decision || `Claude asks about "${f.railed}": your call.` }
   if (f.isAuto && f.autoCount >= f.maxAuto) {
-    return { do: 'ask', why: 'cap', text: `${f.autoCount} standing answers this run. Check in.` }
+    return { do: 'ask', why: 'cap', text: `${f.autoCount} answers sent in a row (your max-auto limit). Check in.` }
   }
   if (await isTyping()) return { do: 'skip', why: 'typing' }
   const reply = v.reply || AUTO_REPLY

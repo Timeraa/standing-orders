@@ -198,8 +198,18 @@ export function clock(ms: number) {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
+// The short "What is this?": the top of the Now tab while it is empty, and of /orders help.
+export const INTRO = [
+  'When Claude finishes a turn and asks you something, the autopilot checks your standing orders.',
+  'If they cover it, it drafts the answer in your prompt box (Draft) or sends it (Auto). If not, or if it touches a word you always ask about (deploy, delete, ...), it asks you instead.',
+  'Your rules live in ~/.claude/standing-orders.md; the Settings tab edits them.',
+] as const
+
 // What /orders help shows: the whole mod in plain words.
 export const HELP = `Standing orders: what it does and when to use what
+
+What is this?
+${INTRO.join('\n')}
 
 When Claude ends a turn on a question ("Want me to commit?"), Haiku checks your
 orders file and picks one of three:
@@ -234,14 +244,17 @@ When to use what:
                                  mode to cycle, Autopilot opens the pane
 
 The line above the prompt (click the mode to cycle it; Autopilot opens the pane):
-  Orders: draft | auto | paused   the mode
+  Replies: draft | auto | paused  the mode
   answered N                      answers given since your last typed prompt
-  Low/Medium/High/Xhigh           effort for this prompt; (yours) if you set it
-  ctx N%                          context used (yellow from 80%)
-  cache m:ss / cache cold         time left on the prompt cache; replying
+  effort Low/Medium/High/Xhigh    how hard Claude thinks about this prompt;
+                                  (yours) if you set it, "capped" when your
+                                  usage limit is nearly used
+  context N%                      context used (yellow from 70%, red from 90%)
+  prompt cache m:ss / cold        time left on the prompt cache; replying
                                   before it runs out is cheaper
-  limit N%                        usage limit (off by default)
+  usage limit N%                  your plan's usage limit used (off by default)
   no repo orders                  this repo has no orders file yet
+  (a narrow line says ctx, cache, limit for the same three)
   Which of these show is yours to choose: /autopilot, Settings, Status line
   (the band: line of your orders file).
 

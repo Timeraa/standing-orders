@@ -87,7 +87,7 @@ test('each guard flips the decision, and an earlier one wins over every later on
     ['stop', { ...everything, composerAt: 0 }, { do: 'stop' }],
     ['judge asks', { ...everything, composerAt: 0, verdict: { action: 'ask', decision: 'which db?' } }, { do: 'ask', why: 'judge', text: 'which db?' }],
     ['rail', { ...everything, composerAt: 0, verdict: { action: 'continue', decision: 'big deal' } }, { do: 'ask', why: 'rail', text: 'big deal' }],
-    ['cap', { ...everything, composerAt: 0, verdict: { action: 'continue' }, railed: null }, { do: 'ask', why: 'cap', text: '5 standing answers this run. Check in.' }],
+    ['cap', { ...everything, composerAt: 0, verdict: { action: 'continue' }, railed: null }, { do: 'ask', why: 'cap', text: '5 answers sent in a row (your max-auto limit). Check in.' }],
     ['typing', { ...everything, composerAt: 0, verdict: { action: 'continue' }, railed: null, autoCount: 4 }, { do: 'skip', why: 'typing' }],
   ]
   for (const [name, f, want] of rows) expect([name, (await decideWith(f, withTyping)).d]).toEqual([name, want])

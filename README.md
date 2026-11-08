@@ -52,23 +52,24 @@ No other network access. Nothing is sent anywhere else.
 
 ## Use it
 
-The line above the prompt has two buttons: the mode label (click to cycle draft → auto → paused) and **Autopilot** (or **Autopilot · 3 to do** when checks wait), which opens the pane. The pane closes with Esc, its **Close** button, or `/autopilot` again, and has two tabs.
+The line above the prompt has two buttons: the mode label (`Replies: draft`, `Replies: auto` or `Replies paused`; click to cycle) and **Autopilot** (or **Autopilot · 3 to do** when checks wait), which opens the pane. Its other parts read `effort`, `context`, `usage limit` and `prompt cache` from 80 columns (`ctx`, `limit`, `cache` below that). The pane closes with Esc, its **Close** button, or `/autopilot` again, and has two tabs.
 
 **Now**
 
-- mode, answers given, and buttons for Draft/Auto and Pause;
+- a short **What is this?** card while there is nothing to show yet (no answers, activity or waiting items); `/orders help` opens with the same text;
+- mode, a sentence on what it does, answers given, and buttons for Draft/Auto and Pause;
 - **Needs you**: the pending question, then things only you can check (a real device, an account, another person), each with a **Done** button and its age. It never holds what Claude could run or look up itself. Each judged turn replaces its own chat's earlier items, the judge ticks off ones the conversation shows are done, and items drop after 3 days. The pane shows the newest five with a **+N older** button. Items that share a lead ("After /reload-plugins, …") group under one heading with **Done all**; **↳ Ask** puts an item in your prompt box; an item in its last day says when it drops;
 - **Activity**: the last 8 things the mod did, newest first. Decisions (`✓` sent, `✎` drafted, `?` asked you, `■` finished) and dimmed picks with their reason, for example `◆ effort high · multi-file feature`, `◇ new chat → opus · hard debugging`, `◇ subagent → haiku/low · grep the repo`. A line below counts this session's picks;
-- **Usage**: context, limit and prompt-cache time left as bars, coloured by how full they are (one text line in a narrow pane).
+- **Usage**: context, usage limit and prompt-cache time left as bars, coloured by how full they are (one text line in a narrow pane), with a line saying what each name means.
 
 Sections are bordered cards that light up under the pointer. Motion is calm: a spinner while the effort is being picked, bars that ease to a new value, and a short highlight on the newest entry. Nothing moves at rest, and it is plain text off the terminal.
 
-**Settings** (every click saves to your orders file)
+**Settings** (every click saves to your orders file; each card says which lines of the file it writes)
 
 - **Effort**: a button cycles auto, each level and off; with auto, buttons step the floor and ceiling or reset them;
 - **New chats** and **Subagents**: turn auto model and auto subagents on or off; choose which models a new chat may pick from;
 - **Replies**: how many answers auto mode sends in a row, and your always-ask words (click one to remove it, type to add);
-- **Status line**: which parts the line above the prompt shows (mode, answered, effort, ctx, limit, cache, repo-orders hint, the Autopilot button) and how long your prompt cache lasts;
+- **Status line**: which parts the line above the prompt shows (mode, answered, effort, context, usage limit, prompt cache, repo-orders hint, the Autopilot button; the file's `band:` line spells them `ctx`, `limit`, `cache`) and how long your prompt cache lasts;
 - **Motion**: turn the animations off;
 - **Repo orders**: whether this repo has its own file, with a button to have Claude write it.
 

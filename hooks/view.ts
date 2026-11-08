@@ -6,7 +6,7 @@
 // No `$` in this file, and no JSX: it is held through its two functions and nothing else.
 import type { Check, Counts, EffortView, LogEntry, Run, Vitals } from '../types'
 import { checkAge, checkLife, shownChecks, type CheckRow } from './checks'
-import { cap, clock, isPick, logBody, logHead } from './judges'
+import { INTRO, cap, clock, isPick, logBody, logHead } from './judges'
 
 // ---- the rules ----------------------------------------------------------
 
@@ -66,18 +66,28 @@ export type Meter = {
   percent: number
   /** How the pane says it: "41%", "51:40 left", "cold". */
   text: string
-  /** How the band says it: "ctx 41%", "cache 51:40", "cache cold". */
+  /** How the band says it in a narrow column: "ctx 41%", "cache 51:40", "cache cold". */
   label: string
+  /** How the band says it from 80 columns: "context 41%", "usage limit 20%", "prompt cache 51:40". */
+  wideLabel: string
   /** The name padded so the bars line up. */
   barName: string
 }
+
+/** What each meter's short name means, for the pane (the band is too narrow to say it). */
+const METER_MEANING = {
+  ctx: 'ctx = how much of this chat\'s context window is used',
+  limit: 'limit = how much of your usage limit is used',
+  cache: 'cache = how long the prompt cache stays warm; replying before it ends is cheaper',
+} as const
 
 /** Context, usage limit and prompt cache, in that order, those with a value. */
 export function meters(v: Vitals): Meter[] {
   const out: Meter[] = []
   const pct = (name: 'ctx' | 'limit', p: number) => {
     const text = `${Math.round(p)}%`
-    out.push({ name, tone: heat(p), percent: p, text, label: `${name} ${text}`, barName: name.padEnd(5) })
+    const wide = name === 'ctx' ? 'context' : 'usage limit'
+    out.push({ name, tone: heat(p), percent: p, text, label: `${name} ${text}`, wideLabel: `${wide} ${text}`, barName: name.padEnd(5) })
   }
   if (v.contextPercent !== null) pct('ctx', v.contextPercent)
   if (v.ratePercent !== null) pct('limit', v.ratePercent)
@@ -90,6 +100,7 @@ export function meters(v: Vitals): Meter[] {
       percent: isCold ? 0 : (left / (v.cacheTtlMin * 60_000)) * 100,
       text: isCold ? 'cold' : `${clock(left)} left`,
       label: isCold ? 'cache cold' : `cache ${clock(left)}`,
+      wideLabel: isCold ? 'prompt cache cold' : `prompt cache ${clock(left)}`,
       barName: 'cache',
     })
   }
@@ -133,13 +144,13 @@ export function needsNote(pending: string, others: number, width: number): Needs
 
 export type BandView = {
   isNarrow: boolean
-  /** The mode button: "✎ Orders: draft", narrow "✎ draft". */
+  /** The mode button: "✎ Replies: draft", narrow "✎ draft". */
   mode: { key: ModeKey; label: string }
   /** Answers given since the person's last typed prompt. */
   answered: number
   effort: {
     isJudging: boolean
-    /** "Sonnet · High (yours) · save", narrow "Sonnet·High*"; '' before the first request. */
+    /** "Sonnet · High (yours) · capped", narrow "Sonnet·High*"; '' before the first request. */
     text: string
     color: string | undefined
   }
@@ -156,7 +167,7 @@ export function bandView(s: Snapshot, o: { columns?: number }): BandView {
   const width = o.columns ?? BAND_COLUMNS
   const isNarrow = width < NARROW_BELOW
   const key = modeKey(s)
-  const wide = { paused: 'Orders paused', auto: 'Orders: auto', draft: 'Orders: draft' }[key]
+  const wide = { paused: 'Replies paused', auto: 'Replies: auto', draft: 'Replies: draft' }[key]
   const ev = s.effort
   const open = s.checks.length
   return {
@@ -166,7 +177,7 @@ export function bandView(s: Snapshot, o: { columns?: number }): BandView {
     effort: {
       isJudging: ev.isJudging,
       text: ev.level
-        ? `${ev.model ? `${cap(ev.model)}${isNarrow ? '·' : ' · '}` : ''}${cap(ev.level)}${ev.isAuto ? '' : isNarrow ? '*' : ' (yours)'}${ev.isSaving ? ' · save' : ''}`
+        ? `${ev.model ? `${cap(ev.model)}${isNarrow ? '·' : ' · '}` : ''}${cap(ev.level)}${ev.isAuto ? '' : isNarrow ? '*' : ' (yours)'}${ev.isSaving ? ' · capped' : ''}`
         : '',
       color: effortColor(ev.level),
     },
@@ -218,6 +229,8 @@ export type PaneView = {
     label: string
     /** "answered 2 of 8" */
     answered: string
+    /** One sentence on what the mode does. */
+    note: string
     tone: string
     /** The mode the first button goes to, and its label. */
     toggleTo: 'draft' | 'auto'
@@ -242,10 +255,18 @@ export type PaneView = {
   }
   activity: {
     rows: ActivityRow[]
-    /** "this session · high ×2 · models opus ×1 · 1 subagents steered", or null when nothing was steered. */
+    /** "picked this session: effort high ×2 · new chats opus ×1 · subagents ×1", or null when nothing was picked. */
     tally: string | null
   }
-  usage: { kind: 'none' | 'inline' | 'bars'; meters: Meter[]; barWidth: number }
+  usage: {
+    kind: 'none' | 'inline' | 'bars'
+    meters: Meter[]
+    barWidth: number
+    /** What each shown meter's name means, one line each. */
+    legend: string[]
+  }
+  /** The "What is this?" lines: only while the pane has nothing to show yet (no answers, no activity, nothing waiting). */
+  intro: readonly string[] | null
 }
 
 /** The pane's width: what the host says, never under 30. */
@@ -274,6 +295,12 @@ export function paneView(s: PaneSnapshot, o: { columns?: number; fx: boolean; no
       key,
       label: `${MODE_ICON[key]} ${cap(key)}`,
       answered: `answered ${s.run.autoCount} of ${o.maxAuto}`,
+      note:
+        key === 'paused'
+          ? 'Paused: Claude\'s questions wait for you.'
+          : key === 'auto'
+            ? `Auto: an answer your orders cover is sent for you, up to ${o.maxAuto} in a row.`
+            : 'Draft: an answer your orders cover is typed into your prompt box; Enter sends it.',
       tone: key === 'paused' ? 'yellow' : key === 'auto' ? 'green' : 'cyan',
       toggleTo: s.mode === 'auto' ? 'draft' : 'auto',
       toggleLabel: s.mode === 'auto' ? 'Draft' : 'Auto',
@@ -288,7 +315,7 @@ export function paneView(s: PaneSnapshot, o: { columns?: number; fx: boolean; no
             title: `${ev.model ? `${cap(ev.model)} · ` : ''}${cap(ev.level)}`,
             note:
               !ev.isAuto || has(ev.why) || ev.isSaving
-                ? `${!ev.isAuto ? 'set by you' : has(ev.why) ? ev.why : ''}${ev.isSaving ? `${has(ev.why) ? ' · ' : ''}capped by usage` : ''}`
+                ? `${!ev.isAuto ? 'set by you' : has(ev.why) ? ev.why : ''}${ev.isSaving ? `${has(ev.why) ? ' · ' : ''}capped by usage limit` : ''}`
                 : null,
           }
         : { kind: 'none' },
@@ -324,15 +351,19 @@ export function paneView(s: PaneSnapshot, o: { columns?: number; fx: boolean; no
         isFlash: i === 0 && fresh(l.at),
       })),
       tally: hasTally
-        ? `this session ·${Object.entries(tl.effort).map(([k, n]) => ` ${k} ×${n}`).join('')}${
-            Object.keys(tl.models).length > 0 ? ` · models${Object.entries(tl.models).map(([k, n]) => ` ${k} ×${n}`).join('')}` : ''
-          }${tl.subagents > 0 ? ` · ${tl.subagents} subagents steered` : ''}`
+        ? `picked this session: ${[
+            ...(Object.keys(tl.effort).length > 0 ? [`effort${Object.entries(tl.effort).map(([k, n]) => ` ${k} ×${n}`).join('')}`] : []),
+            ...(Object.keys(tl.models).length > 0 ? [`new chats${Object.entries(tl.models).map(([k, n]) => ` ${k} ×${n}`).join('')}`] : []),
+            ...(tl.subagents > 0 ? [`subagents ×${tl.subagents}`] : []),
+          ].join(' · ')}`
         : null,
     },
     usage: {
       kind: all.length === 0 ? 'none' : o.fx && width >= BARS_FROM ? 'bars' : 'inline',
       meters: all,
       barWidth: Math.min(BAR_MAX, width - 28),
+      legend: all.map(m => METER_MEANING[m.name]),
     },
+    intro: s.log.length === 0 && s.run.autoCount === 0 && count === 0 ? INTRO : null,
   }
 }

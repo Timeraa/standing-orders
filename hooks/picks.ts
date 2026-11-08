@@ -158,7 +158,7 @@ export function createPicks(orders: () => Orders) {
     const picked = await within(host, job)
     const saving = (await host.view()).isSaving
     if (!picked) {
-      await host.show({ why: 'judge slow: kept', isJudging: false })
+      await host.show({ why: 'too slow: left as is', isJudging: false })
       return
     }
     const { effortMin, effortMax } = orders()
@@ -245,7 +245,7 @@ export function createPicks(orders: () => Orders) {
         effortJob = askEffort(host, p.text)
         await host.show({ isJudging: true })
       } else if (view.isAuto && effortFixed) {
-        await host.show({ why: 'fixed' })
+        await host.show({ why: 'fixed in your orders' })
       } else if (view.isAuto) {
         await host.show({ why: 'kept for a follow-up' })
       }

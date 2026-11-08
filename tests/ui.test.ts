@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import { checkLife, groupChecks, splitLead } from '../hooks/checks'
-import { fit, isPick, logBody, logLine, pickText } from '../hooks/judges'
+import { INTRO, fit, isPick, logBody, logLine, pickText } from '../hooks/judges'
 import { DEFAULT_ORDERS, parseBand, parseOrders, setSetting } from '../hooks/orders'
 import { barCells, ease, shimmerWindow } from '../hooks/motion'
 import { GLOBAL, PANE, REPO, engine, settle } from './support'
@@ -49,12 +49,12 @@ test('the band and the Autopilot pane draw: Now, then Settings, whose buttons wr
       props: { hasSurvey: false, isWorking: true, maxRows: 10 },
     })
     expect((await band.find({ type: 'Text', text: /High/ }))?.text).toContain('High')
-    expect((await band.find({ type: 'Text', text: /cache/ }))?.text).toContain('cache 51:40')
+    expect((await band.find({ type: 'Text', text: /cache/ }))?.text).toContain('prompt cache 51:40')
     expect((await band.find({ type: 'Text', text: /Needs you/ }))?.text).toContain('Deploy')
     // seven open checks: the count, not an agent count
     expect(await band.find({ type: 'Button', label: 'Autopilot · 7 to do' })).toBeTruthy()
     expect(await band.find({ type: 'Button', text: /agents/ })).toBeFalsy()
-    expect(await band.find({ type: 'Button', label: /Orders/ })).toBeTruthy()
+    expect(await band.find({ type: 'Button', label: /Replies/ })).toBeTruthy()
     expect(await band.find({ type: 'Client' })).toBeFalsy() // idle: nothing animates
     await band.unmount()
 
@@ -256,7 +256,7 @@ test('the refresh fills the footer from usage; first run and /orders setup open 
     props: { hasSurvey: false, isWorking: false, maxRows: 10 },
   })
   expect((await band.find({ type: 'Text', text: /orders init/ }))?.text).toContain('no repo orders')
-  expect((await band.find({ type: 'Text', text: /ctx/ }))?.text).toContain('ctx 63%')
+  expect((await band.find({ type: 'Text', text: /context/ }))?.text).toContain('context 63%')
   expect(await band.find({ type: 'Button', label: 'Autopilot' })).toBeTruthy()
   expect(await band.find({ type: 'Button', text: /agents|Crew/ })).toBeFalsy()
   await band.unmount()
@@ -354,7 +354,7 @@ test('Settings customize the status line, replies, models, cache and motion', as
   const band = async (surface: 'terminal' | 'desktop' = 'terminal') => {
     const b = await $.ui.mount({ plugin: 'standing-orders', surface, component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false, maxRows: 10 } })
     const text = async (re: RegExp) => !!(await b.find({ type: 'Text', text: re }))
-    const out = { ctx: await text(/ctx 41%/), limit: await text(/limit 20%/), cache: await text(/cache/), auto: (await b.findAll({ type: 'Button' })).some((x: any) => (x.label ?? x.text) === 'Autopilot') }
+    const out = { ctx: await text(/context 41%/), limit: await text(/usage limit 20%/), cache: await text(/cache/), auto: (await b.findAll({ type: 'Button' })).some((x: any) => (x.label ?? x.text) === 'Autopilot') }
     await b.unmount()
     return out
   }
@@ -515,11 +515,49 @@ test('the band shortens its words in a narrow column', async ($: any, on: any) =
     return out
   }
   const [wideB, wideT] = await labels(120)
-  expect(wideB[0]).toBe('✎ Orders: draft')
+  expect(wideB[0]).toBe('✎ Replies: draft')
   expect(wideT).toContain('Sonnet · High')
   expect(wideT).toContain('no repo orders: /orders init')
   const [narrowB, narrowT] = await labels(50)
   expect(narrowB[0]).toBe('✎ draft')
   expect(narrowT).toContain('Sonnet·High')
   expect(narrowT).toContain('no repo orders')
+})
+
+// The plain-words layer: an intro while the Now tab is empty, a source note on each Settings card, the same intro in /orders help.
+test('the Now tab introduces itself only while empty; Settings cards say where their values live; /orders help opens with the same intro', async ($: any, on: any) => {
+  const { set } = engine(on, { orders: DEFAULT_ORDERS, repoOrders: DEFAULT_ORDERS, state: true })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await settle()
+
+  await set('tab', 'now')
+  for (const bodyColumns of [80, 40]) {
+    const empty = await $.ui.mount({ ...PANE('terminal'), props: { ...PANE('terminal').props, bodyColumns } })
+    expect(await empty.find({ type: 'Text', text: /^What is this\?$/ })).toBeTruthy()
+    expect(await empty.find({ type: 'Text', text: /drafts the answer in your prompt box/ })).toBeTruthy()
+    expect(await empty.find({ type: 'Text', text: /^Draft: an answer your orders cover/ })).toBeTruthy()
+    await empty.unmount()
+  }
+  await set('log', [{ at: 1, kind: 'answered', text: 'Per my standing orders: yes.' }])
+  const busy = await $.ui.mount(PANE('terminal'))
+  expect(await busy.find({ type: 'Text', text: /What is this/ })).toBeFalsy()
+  await busy.unmount()
+  await set('log', [])
+  await set('run', { autoCount: 0, startedAt: 0, pending: 'Deploy to production?', last: null })
+  const waiting = await $.ui.mount(PANE('terminal'))
+  expect(await waiting.find({ type: 'Text', text: /What is this/ })).toBeFalsy()
+  await waiting.unmount()
+
+  await set('tab', 'settings')
+  const settings = await $.ui.mount(PANE('terminal'))
+  const notes = (await settings.findAll({ type: 'Text', text: /^Saved as / })).map((n: any) => n.text as string)
+  expect(notes.length).toBe(6) // Replies, Effort, New chats, Subagents, Status line, Motion
+  for (const key of ['max-auto:', 'effort-min:', 'models:', 'subagents:', 'cache-ttl:', 'motion:']) expect(notes.some((n: string) => n.includes(key))).toBe(true)
+  expect(notes.every((n: string) => n.includes('~/.claude/standing-orders.md'))).toBe(true)
+  expect(await settings.find({ type: 'Text', text: /^A repo file can only add to always-ask, lower max-auto/ })).toBeTruthy()
+  expect(await settings.find({ type: 'Button', label: '✓ context' })).toBeTruthy() // the chip says what it shows; band-ctx still saves ctx
+  await settings.unmount()
+
+  const help = (await $.command.run({ command: 'orders', args: 'help' })).text as string
+  expect(help).toContain(`What is this?\n${INTRO.join('\n')}`)
 })

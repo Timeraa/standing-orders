@@ -91,7 +91,7 @@ test('a slow judge is left behind at the deadline and its late answer is dropped
   expect(t.asked[0]?.timeoutMs).toBe(8000)
   t.timeUp()
   expect(await p).toEqual({})
-  expect(t.view).toMatchObject({ why: 'judge slow: kept', isJudging: false })
+  expect(t.view).toMatchObject({ why: 'too slow: left as is', isJudging: false })
 
   answer()
   await later()
@@ -162,7 +162,7 @@ test('a fixed level runs every prompt as written: no judge, no floor, no ceiling
   expect(await turn(t, 'Rename a variable')).toEqual({ effort: 'max' })
 
   expect(t.asked).toEqual([])
-  expect(t.view.why).toBe('fixed')
+  expect(t.view.why).toBe('fixed in your orders')
   expect(t.notes).toEqual([])
   expect(t.tallies).toEqual([['effort', 'max']])
 })

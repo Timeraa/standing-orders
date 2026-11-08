@@ -85,14 +85,14 @@ test('the band: wide words, then short words below 80 columns', () => {
   const base = snap({ effort: ev, checks: [{ text: 'a', at: 1, chat: '' }] })
   const wide = bandView(base, { columns: 120 })
   expect(wide.isNarrow).toBe(false)
-  expect(wide.mode.label).toBe('✎ Orders: draft')
-  expect(wide.effort.text).toBe('Sonnet · High (yours) · save')
+  expect(wide.mode.label).toBe('✎ Replies: draft')
+  expect(wide.effort.text).toBe('Sonnet · High (yours) · capped')
   expect(wide.hint).toBe('no repo orders: /orders init')
   expect(wide.autopilot).toBe('Autopilot · 1 to do')
   const narrow = bandView(base, { columns: 79 })
   expect(narrow.isNarrow).toBe(true)
   expect(narrow.mode.label).toBe('✎ draft')
-  expect(narrow.effort.text).toBe('Sonnet·High* · save')
+  expect(narrow.effort.text).toBe('Sonnet·High* · capped')
   expect(narrow.hint).toBe('no repo orders')
   expect(narrow.autopilot).toBe('Autopilot · 1')
   expect(bandView(base, { columns: 80 }).isNarrow).toBe(false)
@@ -101,8 +101,8 @@ test('the band: wide words, then short words below 80 columns', () => {
 })
 
 test('the band: mode words, effort colour and the model left out', () => {
-  expect(bandView(snap({ mode: 'auto' }), {}).mode).toEqual({ key: 'auto', label: '▶ Orders: auto' })
-  expect(bandView(snap({ mode: 'auto', isPaused: true }), {}).mode).toEqual({ key: 'paused', label: '⏸ Orders paused' }) // paused wins
+  expect(bandView(snap({ mode: 'auto' }), {}).mode).toEqual({ key: 'auto', label: '▶ Replies: auto' })
+  expect(bandView(snap({ mode: 'auto', isPaused: true }), {}).mode).toEqual({ key: 'paused', label: '⏸ Replies paused' }) // paused wins
   expect(bandView(snap({ mode: 'auto', isPaused: true }), { columns: 40 }).mode.label).toBe('⏸ paused')
   expect(bandView(snap({ mode: 'auto' }), { columns: 40 }).mode.label).toBe('▶ auto')
   const e = (level: string, model?: string) => bandView(snap({ effort: { ...idle, level, model } }), {}).effort
@@ -173,8 +173,8 @@ test('the pane: mode, effort wording and why', () => {
   expect(effort({ level: 'high', why: 'auto' })).toMatchObject({ note: null }) // "auto" says nothing
   expect(effort({ level: 'low', model: 'opus', why: 'tiny edit' })).toEqual({ kind: 'level', color: 'green', title: 'Opus · Low', note: 'tiny edit' })
   expect(effort({ level: 'high', isAuto: false, why: 'tiny edit' })).toMatchObject({ note: 'set by you' })
-  expect(effort({ level: 'high', isSaving: true })).toMatchObject({ note: 'capped by usage' })
-  expect(effort({ level: 'high', why: 'big refactor', isSaving: true })).toMatchObject({ note: 'big refactor · capped by usage' })
+  expect(effort({ level: 'high', isSaving: true })).toMatchObject({ note: 'capped by usage limit' })
+  expect(effort({ level: 'high', why: 'big refactor', isSaving: true })).toMatchObject({ note: 'big refactor · capped by usage limit' })
 })
 
 test('the pane: Needs you counts the question and every open check, wraps the question whole, and groups by lead', () => {
@@ -253,9 +253,9 @@ test('the pane: the activity feed keeps the newest eight and tallies the session
   expect(v.activity.rows.at(-1)?.body).toBe('sent: r2')
   expect(v.activity.tally).toBeNull()
   const counts = (c: Partial<PaneSnapshot['counts']>) => pane({ counts: { effort: {}, models: {}, subagents: 0, ...c } }).activity.tally
-  expect(counts({ effort: { high: 2, low: 1 } })).toBe('this session · high ×2 low ×1')
-  expect(counts({ effort: { high: 2 }, models: { opus: 1 }, subagents: 1 })).toBe('this session · high ×2 · models opus ×1 · 1 subagents steered')
-  expect(counts({ subagents: 3 })).toBe('this session · · 3 subagents steered') // as it always read when only subagents were steered
+  expect(counts({ effort: { high: 2, low: 1 } })).toBe('picked this session: effort high ×2 low ×1')
+  expect(counts({ effort: { high: 2 }, models: { opus: 1 }, subagents: 1 })).toBe('picked this session: effort high ×2 · new chats opus ×1 · subagents ×1')
+  expect(counts({ subagents: 3 })).toBe('picked this session: subagents ×3')
 })
 
 test('the pane meters carry the pane wording', () => {

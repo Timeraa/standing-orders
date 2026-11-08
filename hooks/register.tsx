@@ -9,6 +9,7 @@ import {
   JUDGE,
   PREAMBLE,
   STOPS,
+  INTRO,
   asked,
   fit,
   EFFORTS,
@@ -208,7 +209,7 @@ async function judge($: EngineInterface, answer: string, durationMs: number) {
     await note($, 'stopped', v.decision || 'Finished.')
     if (state.autoCount > 0) {
       await $.ui.notify(v.decision || 'Finished.', {
-        title: `Done after ${state.autoCount} standing answers`,
+        title: `Done after ${state.autoCount} automatic answers`,
       })
     } else {
       await notifyLong($, durationMs, v.decision || answer)
@@ -398,7 +399,7 @@ export const register: Register = on => {
             ? `Auto effort on: Haiku picks ${orders.get().effortMin} to ${orders.get().effortMax} for each prompt you type (Opus and Sonnet 5.5 or newer; mid-chat the model never changes).`
             : choice === 'off'
               ? 'Auto effort off: your own effort setting stands.'
-              : `Effort fixed at ${choice} (Opus and Sonnet 5.5 or newer), no judge.`,
+              : `Effort fixed at ${choice} (Opus and Sonnet 5.5 or newer), no Haiku call.`,
       }
     }
     if (arg === 'setup') {
@@ -447,7 +448,7 @@ export const register: Register = on => {
     const ev = await read($, effort)
     return {
       text: [
-        `Standing orders: ${(await read($, isPaused)) ? 'paused' : await read($, mode)}, answered ${s.autoCount} of ${orders.get().maxAuto}.`,
+        `Standing orders: ${(await read($, isPaused)) ? 'paused' : await read($, mode)}, answered ${s.autoCount} of up to ${orders.get().maxAuto} in a row.`,
         `Effort: ${ev.isAuto ? 'auto' : 'yours'}${ev.level ? `, now ${ev.level}` : ''}${ev.isSaving ? ' (capped: usage past 85%)' : ''}.`,
         ...(s.pending ? [`Needs you: ${s.pending}`] : []),
         'Details and controls: /autopilot',
@@ -494,12 +495,22 @@ export const register: Register = on => {
           ),
         ])
       } else if (view.effort.text !== '') {
-        parts.push(['effort', <Text color={view.effort.color}>{view.effort.text}</Text>])
+        parts.push([
+          'effort',
+          view.isNarrow ? (
+            <Text color={view.effort.color}>{view.effort.text}</Text>
+          ) : (
+            <Box>
+              <Text dimColor>effort </Text>
+              <Text color={view.effort.color}>{view.effort.text}</Text>
+            </Box>
+          ),
+        ])
       }
     }
     for (const name of ['ctx', 'limit', 'cache'] as const) {
       const x = meter(name)
-      if (show(name) && x) parts.push([name, <Text color={x.tone}>{x.label}</Text>])
+      if (show(name) && x) parts.push([name, <Text color={x.tone}>{view.isNarrow ? x.label : x.wideLabel}</Text>])
     }
     if (show('hint') && !v.hasRepoOrders) parts.push(['hint', <Text dimColor>{view.hint}</Text>])
     if (show('autopilot')) {
@@ -576,7 +587,7 @@ export const register: Register = on => {
       // The person's own file, so a repo's orders are never written back into it.
       const mine = orders.mine()
       const choice = effortChoice()
-      const control = (key: string, icon: string, name: string, color: string, value: string, hint: string, buttons: any, extra?: any) =>
+      const control = (key: string, icon: string, name: string, color: string, value: string, hint: string, buttons: any, extra?: any, note?: string) =>
         card(
           key,
           `${icon} ${name}`,
@@ -590,13 +601,14 @@ export const register: Register = on => {
             </Box>
             <Text dimColor>{hint}</Text>
             {extra}
+            {note && source(note)}
           </Box>,
         )
       const onOff = (isOn: boolean, key: 'model' | 'subagents') => (
         <Button key={key} label={isOn ? 'Turn off' : 'Turn on'} onPress={() => writeSetting($, { [key]: isOn ? 'off' : 'auto' })} />
       )
       // A row of toggles: ✓ on, ○ off. `last` keeps at least one on.
-      const chips = <T extends string>(prefix: string, all: readonly T[], active: readonly T[], save: (next: T[]) => void, last = false) => (
+      const chips = <T extends string>(prefix: string, all: readonly T[], active: readonly T[], save: (next: T[]) => void, last = false, names: Record<string, string> = {}) => (
         <Box flexWrap="wrap" columnGap={1}>
           {all.map(name => {
             const isOn = active.includes(name)
@@ -604,7 +616,7 @@ export const register: Register = on => {
               <Button
                 key={`${prefix}-${name}`}
                 dimColor={!isOn}
-                label={`${isOn ? '✓' : '○'} ${name}`}
+                label={`${isOn ? '✓' : '○'} ${names[name] ?? name}`}
                 onPress={() => {
                   const next = all.filter(x => (x === name ? !isOn : active.includes(x)))
                   if (last && next.length === 0) return
@@ -620,6 +632,10 @@ export const register: Register = on => {
         if (words.length) void writeSetting($, { 'always-ask': [...new Set([...mine.terms, ...words])].join(', ') })
       }
       const TTLS = [5, 15, 30, 60]
+      // Where a card's values live, in one dim italic line under it.
+      const source = (text: string) => <Text dimColor italic>{text}</Text>
+      const BAND_NAMES: Record<string, string> = { ctx: 'context', limit: 'usage limit', cache: 'prompt cache', hint: 'repo-orders hint', autopilot: 'Autopilot button' }
+      const REPO_NOTE = 'A repo file can only add to always-ask, lower max-auto, set effort: off and cache-ttl; your own file decides the rest.'
       return (
         <Box flexDirection="column" gap={1}>
           {tabs}
@@ -630,7 +646,9 @@ export const register: Register = on => {
                 startInit($)
                 $.ui.toast(`Asking Claude to write ${REPO_ORDERS} for this repo.`)
               }} />
-            ))}
+            ),
+            undefined,
+            REPO_NOTE)}
           <Box flexDirection="column"><Text bold dimColor>HOW IT ANSWERS</Text><Text dimColor>What the autopilot may do on its own.</Text></Box>
 {card(
             'replies', '✎ Replies', 'green',
@@ -642,18 +660,19 @@ export const register: Register = on => {
                   <Button key="maxauto-inc" label="+" onPress={() => writeSetting($, { 'max-auto': String(Math.min(50, mine.maxAuto + 1)) })} />
                 </Box>
               </Box>
-              <Text dimColor>Always ask you first when a reply or question mentions (click one to remove it):</Text>
+              <Text dimColor>Never answers for you when the question or reply mentions one of these words (click one to remove it):</Text>
               <Box flexWrap="wrap" columnGap={1}>
                 {mine.terms.map(term => (
                   <Button key={`term-${term}`} dimColor label={`${term} ✕`} onPress={() => writeSetting($, { 'always-ask': mine.terms.filter(x => x !== term).join(', ') })} />
                 ))}
               </Box>
               <Input key={`term-add-${mine.terms.length}`} placeholder="add words, comma separated" submitLabel="add" onSubmit={addTerms} />
+              {source('Saved as max-auto: and always-ask: in ~/.claude/standing-orders.md (starter list on first run). A repo file can add words or lower the cap.')}
             </Box>,
           )}
           {control('effort', '◆', 'Effort', effortColor(ev.level) ?? 'magenta',
             `${!ev.isAuto ? 'yours' : mine.effortFixed ? `${mine.effortFixed} (fixed)` : `auto ${mine.effortMin}–${mine.effortMax}`}`,
-            'auto picks low to xhigh thinking for every prompt you type; a level fixes it; off leaves /effort to you.',
+            'How hard Claude thinks. auto picks a level for each prompt you type, between the floor and ceiling; a level fixes it; off leaves /effort to you.',
             <Button key="effort" label={`⟳ ${ev.isAuto ? choice : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />,
             choice === 'auto' && (
               <Box flexShrink={0} gap={1}>
@@ -662,30 +681,37 @@ export const register: Register = on => {
                 <Button key="ceiling" label={`ceiling ${mine.effortMax}${mine.effortMax === 'xhigh' ? ' (default)' : ''}`} onPress={() => writeSetting($, { 'effort-max': cycleOf(orders.mine().effortMax, ['medium', 'high', 'xhigh', 'max']) })} />
                 <Button key="reset" label="reset" onPress={() => writeSetting($, { 'effort-min': 'low', 'effort-max': 'xhigh' })} />
               </Box>
-            ))}
+            ),
+            'Saved as effort:, effort-min: and effort-max: in ~/.claude/standing-orders.md. A repo file can only set effort: off.')}
                     <Box flexDirection="column"><Text bold dimColor>MODELS</Text><Text dimColor>Which model and effort each chat and helper gets.</Text></Box>
 {control('chats', '◇', 'New chats', 'blue', mine.isModelAuto ? `auto · ${mine.models.join(' / ')}` : 'your /model',
-            'Picks the model from your first message, only while the chat is empty (cache-safe). Choose which models it may use.',
+            'Picks the model from your first message of a brand-new chat, never mid-chat. Choose which models it may pick.',
             onOff(mine.isModelAuto, 'model'),
-            mine.isModelAuto && chips('model', MODEL_NAMES, mine.models, next => void writeSetting($, { models: next.join(', ') }), true))}
-          {control('subagents', '◇', 'Subagents', 'cyan', mine.isSubagentsAuto ? 'auto · model + effort per task' : 'inherit the chat',
-            'Picks a model (Haiku for mechanical work) and effort for each helper from its task. Anything you named wins.',
-            onOff(mine.isSubagentsAuto, 'subagents'))}
+            mine.isModelAuto && chips('model', MODEL_NAMES, mine.models, next => void writeSetting($, { models: next.join(', ') }), true),
+            'Saved as model: and models: in ~/.claude/standing-orders.md.')}
+          {control('subagents', '◇', 'Subagents', 'cyan', mine.isSubagentsAuto ? 'auto · model + effort per task' : 'same as the chat',
+            'Subagents are the helper agents Claude starts for side tasks. auto picks each one\'s model (Haiku for mechanical work) and effort from its task; a model Claude already named for it wins.',
+            onOff(mine.isSubagentsAuto, 'subagents'),
+            undefined,
+            'Saved as subagents: in ~/.claude/standing-orders.md.')}
                     <Box flexDirection="column"><Text bold dimColor>DISPLAY</Text><Text dimColor>What you see above the prompt and in this pane.</Text></Box>
 {card(
             'band', '▤ Status line', 'yellow',
             <Box flexDirection="column" gap={1}>
               <Text dimColor>What the line above the prompt shows:</Text>
-              {chips('band', BAND_ITEMS, mine.band, next => void writeSetting($, { band: next.join(', ') }))}
+              {chips('band', BAND_ITEMS, mine.band, next => void writeSetting($, { band: next.join(', ') }), false, BAND_NAMES)}
               <Box justifyContent="space-between">
-                <Text>Prompt cache lasts {mine.cacheTtlMin} min <Text dimColor>(a repo may set its own)</Text></Text>
+                <Text>Prompt cache lasts {mine.cacheTtlMin} min</Text>
                 <Button key="ttl" label="⟳ change" onPress={() => writeSetting($, { 'cache-ttl': String(cycleOf(orders.mine().cacheTtlMin, TTLS)) })} />
               </Box>
+              {source('Saved as band: and cache-ttl: in ~/.claude/standing-orders.md. cache-ttl only sets the cache countdown; a repo file may set its own.')}
             </Box>,
           )}
           {control('motion', '✦', 'Motion', 'magenta', mine.isMotionOn ? 'on · only while something happens' : 'off · static text',
             'A spinner while effort is picked, bars that ease, a highlight on new entries. Nothing moves at rest.',
-            <Button key="motion" label={mine.isMotionOn ? 'Turn off' : 'Turn on'} onPress={() => writeSetting($, { motion: mine.isMotionOn ? 'off' : 'on' })} />)}
+            <Button key="motion" label={mine.isMotionOn ? 'Turn off' : 'Turn on'} onPress={() => writeSetting($, { motion: mine.isMotionOn ? 'off' : 'on' })} />,
+            undefined,
+            'Saved as motion: in ~/.claude/standing-orders.md.')}
           {v.hasRepoOrders && control('repo', '◈', 'Repo orders', 'yellow', v.hasRepoOrders ? 'found' : 'none',
             'This repo\'s own .claude/standing-orders.md: how to verify work here, what to ask first.',
             v.hasRepoOrders ? null : (
@@ -693,9 +719,11 @@ export const register: Register = on => {
                 startInit($)
                 $.ui.toast(`Asking Claude to write ${REPO_ORDERS} for this repo.`)
               }} />
-            ))}
+            ),
+            undefined,
+            REPO_NOTE)}
           <Text dimColor>
-            {orders.get().terms.length} always-ask words · every click saves · rules live in ~/.claude/standing-orders.md
+            {orders.get().terms.length} always-ask words in force · every click saves to ~/.claude/standing-orders.md
           </Text>
         </Box>
       )
@@ -706,37 +734,45 @@ export const register: Register = on => {
       { run: s, checks: list, isPaused: paused, mode: m, effort: ev, vitals: v, log: entries, counts: tl, isChecksOpen: isOpen },
       { columns: e.props.bodyColumns, fx, now, maxAuto: orders.get().maxAuto },
     )
-    const { mode: vm, needs, activity, usage } = view
+    const { mode: vm, needs, activity, usage, intro } = view
 
     return (
       <Box flexDirection="column" gap={1}>
         {tabs}
-        <Box justifyContent="space-between">
-          <Text bold color={vm.tone}>
-            {vm.label}
-            <Text dimColor> · {vm.answered}</Text>
-          </Text>
-          <Box gap={1}>
-            <Button key="mode" label={vm.toggleLabel} onPress={() => setMode($, vm.toggleTo)} />
-            <Button key="pause" label={vm.pauseLabel} onPress={() => setPaused($, !paused)} />
+        {intro && card('intro', 'What is this?', 'cyan', <Box flexDirection="column">{intro.map(line => <Text key={line} dimColor>{line}</Text>)}</Box>)}
+        <Box flexDirection="column">
+          <Box justifyContent="space-between">
+            <Text bold color={vm.tone}>
+              {vm.label}
+              <Text dimColor> · {vm.answered}</Text>
+            </Text>
+            <Box gap={1}>
+              <Button key="mode" label={vm.toggleLabel} onPress={() => setMode($, vm.toggleTo)} />
+              <Button key="pause" label={vm.pauseLabel} onPress={() => setPaused($, !paused)} />
+            </Box>
           </Box>
+          <Text dimColor>{vm.note}</Text>
         </Box>
 
         {card(
           'effort', 'Effort', 'magenta',
-          view.effort.kind === 'judging' ? (
-            fx ? <Client key="judging" module="./motion.tsx" props={{ kind: 'spinner', label: 'deciding' }} /> : <Text dimColor>deciding…</Text>
-          ) : view.effort.kind === 'level' ? (
-            <Box flexDirection="column">
-              <Text bold color={view.effort.color}>{view.effort.title}</Text>
-              {view.effort.note !== null && <Text dimColor>{view.effort.note}</Text>}
-            </Box>
-          ) : <Text dimColor>Picked with your next prompt.</Text>,
+          <Box flexDirection="column">
+            <Text dimColor>How hard Claude thinks about your prompt.</Text>
+            {view.effort.kind === 'judging' ? (
+              fx ? <Client key="judging" module="./motion.tsx" props={{ kind: 'spinner', label: 'deciding' }} /> : <Text dimColor>deciding…</Text>
+            ) : view.effort.kind === 'level' ? (
+              <Box flexDirection="column">
+                <Text bold color={view.effort.color}>{view.effort.title}</Text>
+                {view.effort.note !== null && <Text dimColor>{view.effort.note}</Text>}
+              </Box>
+            ) : <Text dimColor>Chosen when you send your next prompt.</Text>}
+          </Box>,
         )}
 
         {needs.hasAny ? card(
           'needs', `Needs you · ${needs.count}`, 'yellow',
           <Box flexDirection="column">
+            <Text dimColor>Claude's question for you, and things only you can check.</Text>
             {needs.pending && (
               <Box flexDirection="column">
                 <Box>
@@ -807,7 +843,7 @@ export const register: Register = on => {
                     </Box>
                   ),
                 )
-              : <Text dimColor>Nothing yet. Decisions and picks show up here.</Text>}
+              : <Text dimColor>Nothing yet. Answers it sends or drafts, questions it passes to you, and the effort and models it picks show up here.</Text>}
             {activity.tally && <Text dimColor>{activity.tally}</Text>}
           </Box>,
         )}
@@ -819,16 +855,20 @@ export const register: Register = on => {
               {usage.meters.map(x => (
                 <Client key={`bar-${x.name}`} module="./motion.tsx" props={{ kind: 'bar', name: x.barName, percent: x.percent, color: x.tone, width: usage.barWidth, text: x.text }} />
               ))}
+              {usage.legend.map(line => <Text key={line} dimColor>{line}</Text>)}
             </Box>,
           )
         ) : usage.kind === 'inline' ? (
-          <Box>
-            {usage.meters.map((x, i) => (
-              <Box key={x.name}>
-                {i > 0 && <Text dimColor> · </Text>}
-                <Text color={x.tone}>{x.name} {x.text}</Text>
-              </Box>
-            ))}
+          <Box flexDirection="column">
+            <Box>
+              {usage.meters.map((x, i) => (
+                <Box key={x.name}>
+                  {i > 0 && <Text dimColor> · </Text>}
+                  <Text color={x.tone}>{x.name} {x.text}</Text>
+                </Box>
+              ))}
+            </Box>
+            {usage.legend.map(line => <Text key={line} dimColor>{line}</Text>)}
           </Box>
         ) : null}
       </Box>
