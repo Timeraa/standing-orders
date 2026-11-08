@@ -277,11 +277,11 @@ export const JUDGE_NAMES: Record<string, string> = {
   subagent: 'Subagent pick',
 }
 
-/** The one-sentence verdict over the headline numbers. */
+/** The one-sentence verdict over the headline numbers: the likely picture first, what is measured and what is not said plainly. */
 export function verdict(t: Totals): string {
   if (t.requests === 0 && t.spent.tokens === 0) return 'Nothing recorded yet. Use Claude Code with auto effort, model or subagents on and this fills in.'
-  if (t.net >= 0) return `Saving you ${usd(t.net)} in API-equivalent usage, measured.`
-  const gap = `Measured, the model picks save ${usd(t.saved.usd)} and the picks and judgements cost ${usd(t.spent.usd)}: ${usd(-t.net)} more than they save.`
-  if (t.netWithEffort >= 0) return `${gap} The effort estimate (not measured) is ${usd(t.effortUsd.point, true)}, which would put you ahead by about ${usd(t.netWithEffort)}.`
-  return `${gap} Even with the effort estimate (${usd(t.effortUsd.point, true)}) it costs ${usd(-t.netWithEffort)} more than it saves.`
+  if (t.net >= 0) return `Saving you ${usd(t.net)} in API-equivalent usage, measured${t.effortUsd.point > 0 ? `, plus about ${usd(t.effortUsd.point)} more from lower effort (an estimate)` : ''}.`
+  const measured = `Measured alone it is ${usd(t.net, true)}: its own calls cost ${usd(t.spent.usd)} and model picks saved ${usd(t.saved.usd)}.`
+  if (t.netWithEffort >= 0) return `Probably saving you about ${usd(t.netWithEffort)}, almost all from lower effort, which cannot be measured exactly. ${measured}`
+  return `Costing you about ${usd(-t.netWithEffort)} more than it saves, even counting the effort estimate. ${measured}`
 }

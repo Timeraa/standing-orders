@@ -740,11 +740,14 @@ export const register: Register = on => {
             'table', 'The numbers', 'cyan',
             <Box flexDirection="column">
               {head}
-              {line('Saved by model picks', x => x.saved.usd, { toks: x => x.saved.tokens })}
-              {line('Spent on picks and judging', x => -x.spent.usd, { toks: x => x.spent.tokens })}
-              {line('Net, measured', x => x.net, { bold: true })}
-              {line('Effort estimate (not counted)', x => x.effortUsd.point, { dim: true })}
-              {line('Net with the estimate', x => x.netWithEffort)}
+              <Text bold>Saved</Text>
+              {line('  Model picks (measured)', x => x.saved.usd, { toks: x => x.saved.tokens })}
+              {line('  Effort (estimate)', x => x.effortUsd.point)}
+              <Text bold>Cost</Text>
+              {line('  Autopilot\'s own Haiku calls (measured)', x => -x.spent.usd, { toks: x => x.spent.tokens })}
+              <Text bold>Bottom line</Text>
+              {line('  Measured only', x => x.net)}
+              {line('  With the effort estimate', x => x.netWithEffort, { bold: true })}
               <Text dimColor>
                 {`${pick.label} in tokens: ${tok(sel.saved.tokens)} moved to a cheaper model · ${tok(sel.spent.tokens)} spent on the autopilot's own Haiku calls.`}
               </Text>

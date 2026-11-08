@@ -31,6 +31,7 @@ test('stats: a cheaper model saves the repriced tokens, the autopilot own calls 
   expect(s.unchanged.n).toBe(1)
   expect(s.judges).toMatchObject([{ kind: 'verdict', n: 1, tokensIn: 100_000, tokensOut: 1000 }])
   expect(verdict(t)).toContain('Saving you $2.84')
+  expect(verdict(summarize(recordSpent(EMPTY, TODAY, 'effort', U(1_000_000, 0)), TODAY, 'day').totals.day)).toContain('Costing you')
 })
 
 test('stats: a dearer pick and a costly judge read as a cost, and the verdict says so', () => {
@@ -40,7 +41,7 @@ test('stats: a dearer pick and a costly judge read as a cost, and the verdict sa
   const t = summarize(l, TODAY, 'day').totals.day
   expect(t.saved.usd).toBeLessThan(0)
   expect(t.net).toBeLessThan(0)
-  expect(verdict(t)).toContain('more than they save')
+  expect(verdict(t)).toContain('more than it saves')
   expect(verdict(summarize(EMPTY, TODAY, 'day').totals.day)).toContain('Nothing recorded yet')
 })
 
@@ -152,4 +153,12 @@ test('stats: session start merges every saved slice, folds the old ones into the
   await pane.unmount()
   // and the command opens the tab
   expect((await $.command.run({ command: 'orders', args: 'savings' })).text).toContain('savings')
+})
+
+test('stats: when only the effort estimate is positive, the verdict leads with it and says what is measured', () => {
+  let l = recordRun(EMPTY, TODAY, { who: 'chat', usage: { ...U(1000, 100_000), model: 'claude-sonnet-5-5' }, wouldModel: 'claude-sonnet-5-5', ranEffort: 'low', wouldEffort: 'high' })
+  l = recordSpent(l, TODAY, 'effort', U(1000, 50))
+  const v = verdict(summarize(l, TODAY, 'day').totals.day)
+  expect(v).toContain('Probably saving you')
+  expect(v).toContain('Measured alone it is −$')
 })
