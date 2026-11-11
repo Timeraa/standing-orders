@@ -123,6 +123,8 @@ export function createPicks(orders: () => Orders) {
   // The session's own level as last seen, and the one we last set: a request that matches neither was changed by the person.
   let lastBase: unknown
   let lastApplied: unknown
+  // The person set effort themselves (/effort): auto stays off until they turn it on again, whatever the orders say.
+  let isTakenOver = false
   // The effort judge's context: how the agent's last message ended.
   let lastAnswerTail = ''
   // model: chosen once, for a chat with no history
@@ -196,13 +198,20 @@ export function createPicks(orders: () => Orders) {
      * isAuto changes in three places only: here, `followOrders` and a request the person changed.
      */
     async setAuto(host: Host, isAuto: boolean) {
+      isTakenOver = !isAuto
       await host.show({ isAuto, why: isAuto ? 'auto' : 'yours' })
       if (!isAuto) turnEffort = null
     },
 
-    /** The orders were (re)loaded: if they turn effort off, auto is off. (This one leaves this turn's level standing.) */
+    /**
+     * The orders were (re)loaded or a pause changed: off turns auto off; on turns it back on,
+     * unless the person took effort over. (Off leaves this turn's level standing.)
+     */
     async followOrders(host: Host) {
-      if (!orders().isEffortAuto) await host.show({ isAuto: false })
+      const isAuto = orders().isEffortAuto
+      const view = await host.view()
+      if (!isAuto && view.isAuto) await host.show({ isAuto: false })
+      else if (isAuto && !view.isAuto && !isTakenOver) await host.show({ isAuto: true, why: 'auto' })
     },
 
     /** The agent's message ended: its tail is the next effort judge's context. */
@@ -271,6 +280,7 @@ export function createPicks(orders: () => Orders) {
         if (moved && view.isAuto) {
           turnEffort = null
           effortJob = null
+          isTakenOver = true
           view = await host.show({ isAuto: false, isJudging: false, why: 'yours' })
           record.effortTakenOver(host)
         }

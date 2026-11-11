@@ -175,6 +175,22 @@ export type SettingKey =
   | 'band'
 export type Settings = Partial<Record<SettingKey, string>>
 
+/** What can be paused for a while without touching the file: the session's or this project's. */
+export const PARTS = ['replies', 'effort', 'model', 'subagents'] as const
+export type Part = (typeof PARTS)[number]
+export type Scope = 'session' | 'project'
+
+// A pause only turns things off, so it is laid over the merged orders like a repo's tightening.
+export function withPaused(o: Orders, paused: ReadonlySet<Part>): Orders {
+  if (!paused.size) return o
+  return {
+    ...o,
+    ...(paused.has('effort') ? { isEffortAuto: false, effortFixed: null } : {}),
+    ...(paused.has('model') ? { isModelAuto: false } : {}),
+    ...(paused.has('subagents') ? { isSubagentsAuto: false } : {}),
+  }
+}
+
 const attempt = async <T>(job: () => Promise<T>): Promise<T | null> => {
   try {
     return await job()
@@ -197,6 +213,9 @@ export function createOrders() {
   let merged = parseOrders(DEFAULT_ORDERS)
   let own = parseOrders(DEFAULT_ORDERS)
   let isFirstRun = false
+  // Pauses: never written to a file. The session's live in memory, the project's in the plugin store (the caller's).
+  const paused = { session: new Set<Part>(), project: new Set<Part>() }
+  const pausedNow = () => new Set([...paused.session, ...paused.project])
 
   // Reads each file once; reloads when asked to or when either differs from the last load.
   async function refresh(fs: FileStore, force = false) {
@@ -220,8 +239,15 @@ export function createOrders() {
   }
 
   return {
-    /** What the mod obeys: the global file plus what the repo's file may tighten. */
-    get: () => merged,
+    /** What the mod obeys: the global file, what the repo's file may tighten, and what is paused. */
+    get: () => withPaused(merged, pausedNow()),
+    /** What is paused, per scope (replies are only listed here; the caller holds them back). */
+    paused: (scope?: Scope) => (scope ? new Set(paused[scope]) : pausedNow()),
+    /** Pauses (`on`) or resumes parts in one scope. Returns that scope's parts after the change. */
+    pause(scope: Scope, parts: readonly Part[], on: boolean) {
+      for (const p of parts) on ? paused[scope].add(p) : paused[scope].delete(p)
+      return [...paused[scope]]
+    },
     /** The person's own file alone. */
     mine: () => own,
     /** Whether the repo has an orders file. */

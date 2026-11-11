@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+- **Pause for a session or a project**, without touching your orders file: `/orders pause [replies|effort|model|subagents] [project]` and `/orders resume …`, plus a Pause card on the Settings tab. Before, every off switch for effort, model and subagents rewrote `~/.claude/standing-orders.md`, so it turned them off in every session and project until turned back on. A session pause ends with the session; a project pause is kept per folder in the plugin store. `/orders` lists what is paused, and paused parts say so on their Settings cards.
+- `/orders subagents auto|off`: subagents had only a Settings button.
+- Effort auto comes back when the orders turn it back on (an edited file, or a resume), unless you took effort over with `/effort`. Before, once off it stayed off until `/orders effort auto`.
+
 ## 0.13.0
 - Savings can now prove it. The table reads Saved, Cost, Bottom line, with a verdict that says "Proven" only when its whole 95% range is on one side of zero.
 - New **Savings audit** (`audit: on`, a button on the Savings tab; off by default): about one turn in five whose effort the mod would set runs at your own effort instead, chosen by a hash of the turn id. The difference in output tokens per request between the two groups is the effort effect, measured, with a 95% range. Without it effort stays an assumed estimate and the verdict says "Not proven".

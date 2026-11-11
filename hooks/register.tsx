@@ -18,7 +18,7 @@ import {
   type Effort,
 } from './judges'
 import { checkAge, createChecks, type Host as ChecksHost } from './checks'
-import { BAND_ITEMS, createOrders, type BandItem, type FileStore, type Settings } from './orders'
+import { BAND_ITEMS, PARTS, createOrders, type BandItem, type FileStore, type Part, type Scope, type Settings } from './orders'
 import { createPicks, type Host } from './picks'
 import { IDLE, beforeJudging, decide, drafted, sent, waiting, whenTyped } from './run'
 import {
@@ -68,6 +68,8 @@ const picks = createPicks(() => orders.get())
 const needsYou = createChecks()
 
 const ctx = {
+  /** The session's folder: a project pause is kept per folder. */
+  cwd: '',
   turnStartedAt: 0,
   composerAt: 0,
   isTicking: false,
@@ -201,8 +203,21 @@ const EFFORT_CHOICES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'off'] 
 const effortChoice = () => (!orders.mine().isEffortAuto ? 'off' : (orders.mine().effortFixed ?? 'auto'))
 async function chooseEffort($: EngineInterface, choice: string) {
   await writeSetting($, { effort: choice })
-  await picks.setAuto(pickHost($), choice !== 'off')
+  // Off is the file's (followOrders), so editing it back to auto resumes; a choice here also ends a /effort takeover.
+  if (choice !== 'off') await picks.setAuto(pickHost($), true)
 }
+
+// A pause never touches the orders file: the session's is in memory, the project's in the plugin store.
+const pausedKey = (cwd: string) => `paused:${cwd}`
+async function pauseParts($: EngineInterface, scope: Scope, parts: readonly Part[], on: boolean) {
+  // Session replies are the mode's own pause (the band's "Replies paused").
+  if (scope === 'session' && parts.includes('replies')) await setPaused($, on)
+  const left = orders.pause(scope, scope === 'session' ? parts.filter(p => p !== 'replies') : parts, on)
+  if (scope === 'project') await $.store.set(pausedKey(ctx.cwd), left)
+  await applyOrders($)
+}
+// Replies are held back by a session pause (the mode) or a project one.
+const isRepliesPaused = async ($: EngineInterface) => (await read($, isPaused)) || orders.paused('project').has('replies')
 // A tab is named only to land on it; a plain open keeps the one the person left.
 const openPane = async ($: EngineInterface, t?: 'now' | 'settings' | 'savings') => {
   if (t) await update($, tab, () => t)
@@ -215,7 +230,11 @@ const startInit = ($: EngineInterface) =>
   $.clock.after(50, () => void $.prompt.submit({ text: INIT_PROMPT, asUser: true }).catch(() => {}))
 // Paused, then draft, then auto: one click walks the whole mode.
 const cycle = async ($: EngineInterface) => {
-  if (await read($, isPaused)) return setMode($, 'draft')
+  if (await isRepliesPaused($)) {
+    // The mode's click also ends a project pause of replies: the band would read paused otherwise.
+    if (orders.paused('project').has('replies')) await pauseParts($, 'project', ['replies'], false)
+    return setMode($, 'draft')
+  }
   if ((await read($, mode)) === 'draft') return setMode($, 'auto')
   return setPaused($, true)
 }
@@ -247,7 +266,7 @@ async function wait($: EngineInterface, decision: string) {
 
 async function judge($: EngineInterface, answer: string, durationMs: number) {
   const judgedAt = await $.clock.now()
-  if (beforeJudging({ isPaused: await read($, isPaused), composerAt: ctx.composerAt, turnStartedAt: ctx.turnStartedAt })) return
+  if (beforeJudging({ isPaused: await isRepliesPaused($), composerAt: ctx.composerAt, turnStartedAt: ctx.turnStartedAt })) return
 
   const tail = answer.slice(-2500)
   const open = await read($, checks)
@@ -339,11 +358,17 @@ export const register: Register = on => {
     // Commands first: whatever fails below, /orders and /autopilot still exist.
     await $.command.register({
       name: 'orders',
-      description: 'Standing orders: status, help, setup, init, auto, draft, on, off, effort <level>|model auto|off. Controls live in /autopilot',
+      description: 'Standing orders: status, help, setup, init, auto, draft, on, off, pause|resume [part] [project], effort <level>|model|subagents auto|off. Controls live in /autopilot',
     })
     await $.command.register({ name: 'autopilot', description: 'What needs you, what the orders did and picked, and the settings' })
     await $.command.register({ name: 'crew', description: 'Old name of /autopilot' })
     orders.locate({ cwd: e.cwd, globalPath: `${(await $.env.get('HOME')) ?? ''}/.claude/standing-orders.md` })
+    ctx.cwd = e.cwd
+    // This project's pause, before the first prompt can pick anything. A new session's own pause starts empty.
+    const saved = await $.store.get(pausedKey(e.cwd)).catch(() => undefined)
+    orders.pause('session', PARTS, false)
+    orders.pause('project', PARTS, false)
+    orders.pause('project', Array.isArray(saved) ? saved.filter((p): p is Part => PARTS.includes(p)) : [], true)
     await reloadOrders($, true)
     const startedAt = await $.clock.now()
     await needsYou.load(checkHost($), { cwd: e.cwd, now: startedAt })
@@ -521,6 +546,27 @@ export const register: Register = on => {
           : 'Auto model off: /model stands.',
       }
     }
+    if (arg === 'subagents') {
+      if (sub !== 'auto' && sub !== 'off') return { text: 'Usage: /orders subagents auto|off' }
+      await writeSetting($, { subagents: sub })
+      return { text: sub === 'auto' ? 'Auto subagents on: each helper gets a model and effort picked from its task.' : 'Auto subagents off: helpers run as the Agent call says.' }
+    }
+    if (arg === 'pause' || arg === 'resume') {
+      const words = [sub, ...rest].filter(Boolean)
+      const scope: Scope = words.includes('project') ? 'project' : 'session'
+      const named = words.filter((w): w is Part => PARTS.includes(w as Part))
+      const bad = words.filter(w => !['project', 'session', 'all', ...PARTS].includes(w))
+      if (bad.length) return { text: `Usage: /orders ${arg} [${PARTS.join('|')}|all] [project]` }
+      const parts = named.length ? named : PARTS
+      const isPause = arg === 'pause'
+      await pauseParts($, scope, parts, isPause)
+      const where = scope === 'project' ? `in ${ctx.cwd} (every session here, until /orders resume project)` : 'for this session'
+      const pinned = isPause && parts.includes('model') ? ' A chat already on its picked model stays on it.' : ''
+      const still = orders.paused()
+      return {
+        text: `${isPause ? 'Paused' : 'Resumed'} ${parts.join(', ')} ${where}. Your orders file is unchanged.${pinned}${!isPause && still.size ? ` Still paused: ${[...still].join(', ')}.` : ''}`,
+      }
+    }
     if (arg === 'auto' || arg === 'draft') {
       await setMode($, arg)
       return {
@@ -548,13 +594,17 @@ export const register: Register = on => {
       const now = await $.clock.now()
       return { text: list.length ? list.map(c => `- ${c.text} (${checkAge(now - c.at)})`).join('\n') : 'No checks waiting.' }
     }
-    if (arg !== '') return { text: 'Usage: /orders [help | setup | savings | init | auto | draft | on | off | effort auto|off|<level>|min|max | model auto|off]. Details and controls: /autopilot' }
+    if (arg !== '') return { text: 'Usage: /orders [help | setup | savings | init | auto | draft | on | off | pause|resume [replies|effort|model|subagents|all] [project] | effort auto|off|<level>|min|max | model auto|off | subagents auto|off]. Details and controls: /autopilot' }
     const s = await read($, run)
     const ev = await read($, effort)
     return {
       text: [
-        `Standing orders: ${(await read($, isPaused)) ? 'paused' : await read($, mode)}, answered ${s.autoCount} of up to ${orders.get().maxAuto} in a row.`,
+        `Standing orders: ${(await isRepliesPaused($)) ? 'paused' : await read($, mode)}, answered ${s.autoCount} of up to ${orders.get().maxAuto} in a row.`,
         `Effort: ${ev.isAuto ? 'auto' : 'yours'}${ev.level ? `, now ${ev.level}` : ''}${ev.isSaving ? ' (capped: usage past 85%)' : ''}.`,
+        ...(['session', 'project'] as const).flatMap(sc => {
+          const list = [...orders.paused(sc)]
+          return list.length ? [`Paused ${sc === 'session' ? 'this session' : 'in this project'}: ${list.join(', ')} (/orders resume${sc === 'project' ? ' project' : ''}).`] : []
+        }),
         ...(s.pending ? [`Needs you: ${s.pending}`] : []),
         'Details and controls: /autopilot',
       ].join('\n'),
@@ -566,7 +616,7 @@ export const register: Register = on => {
     const [s, list, paused, m, ev, v] = await Promise.all([
       read($, run),
       read($, checks),
-      read($, isPaused),
+      isRepliesPaused($),
       read($, mode),
       read($, effort),
       read($, vitals),
@@ -648,7 +698,7 @@ export const register: Register = on => {
     const Client = clientOf(ui)
     const [t, v, s, list, paused, m, ev, entries, tl, isOpen, now, ledger, period] = await Promise.all([
       read($, tab), read($, vitals), read($, run), read($, checks),
-      read($, isPaused), read($, mode), read($, effort), read($, log), read($, counts), read($, isChecksOpen),
+      isRepliesPaused($), read($, mode), read($, effort), read($, log), read($, counts), read($, isChecksOpen),
       $.clock.now(), read($, statsLedger), read($, statsPeriod),
     ])
     // The pane body scrolls, so nothing here is squeezed to a height.
@@ -894,6 +944,10 @@ export const register: Register = on => {
       // The person's own file, so a repo's orders are never written back into it.
       const mine = orders.mine()
       const choice = effortChoice()
+      const held = orders.paused()
+      const pausedIn = (sc: Scope) => [...orders.paused(sc), ...(sc === 'session' && paused && !orders.paused('project').has('replies') ? ['replies'] : [])]
+      const isAllPaused = (sc: Scope) => PARTS.every(p => pausedIn(sc).includes(p))
+      const tag = (part: Part) => (held.has(part) ? ' · paused' : '')
       const control = (key: string, icon: string, name: string, color: string, value: string, hint: string, buttons: any, extra?: any, note?: string) =>
         card(
           key,
@@ -977,8 +1031,19 @@ export const register: Register = on => {
               {source('Saved as max-auto: and always-ask: in ~/.claude/standing-orders.md (starter list on first run). A repo file can add words or lower the cap.')}
             </Box>,
           )}
+          {control('pause', '❚❚', 'Pause', 'gray',
+            (['session', 'project'] as const).map(sc => pausedIn(sc).length ? `${sc === 'session' ? 'this session' : 'this project'}: ${pausedIn(sc).join(', ')}` : '').filter(Boolean).join(' · ') || 'nothing paused',
+            'Turns replies, effort, model and subagents off for a while without changing your orders file. Per part: /orders pause effort model [project].',
+            (
+              <Box gap={1}>
+                <Button key="pause-session" label={isAllPaused('session') ? 'Resume session' : 'This session'} onPress={() => pauseParts($, 'session', PARTS, !isAllPaused('session'))} />
+                <Button key="pause-project" label={isAllPaused('project') ? 'Resume project' : 'This project'} onPress={() => pauseParts($, 'project', PARTS, !isAllPaused('project'))} />
+              </Box>
+            ),
+            undefined,
+            'A session pause ends with the session; a project pause is kept for this folder until you resume it.')}
           {control('effort', '◆', 'Effort', effortColor(ev.level) ?? 'magenta',
-            `${!ev.isAuto ? 'yours' : mine.effortFixed ? `${mine.effortFixed} (fixed)` : `auto ${mine.effortMin}–${mine.effortMax}`}`,
+            `${held.has('effort') ? 'paused' : !ev.isAuto ? 'yours' : mine.effortFixed ? `${mine.effortFixed} (fixed)` : `auto ${mine.effortMin}–${mine.effortMax}`}`,
             'How hard Claude thinks. auto picks a level for each prompt you type, between the floor and ceiling; a level fixes it; off leaves /effort to you.',
             <Button key="effort" label={`⟳ ${ev.isAuto ? choice : 'yours'}`} onPress={() => chooseEffort($, cycleOf(effortChoice(), EFFORT_CHOICES))} />,
             choice === 'auto' && (
@@ -991,12 +1056,12 @@ export const register: Register = on => {
             ),
             'Saved as effort:, effort-min: and effort-max: in ~/.claude/standing-orders.md. A repo file can only set effort: off.')}
                     <Box flexDirection="column"><Text bold dimColor>MODELS</Text><Text dimColor>Which model and effort each chat and helper gets.</Text></Box>
-{control('chats', '◇', 'New chats', 'blue', mine.isModelAuto ? `auto · ${mine.models.join(' / ')}` : 'your /model',
+{control('chats', '◇', 'New chats', 'blue', (mine.isModelAuto ? `auto · ${mine.models.join(' / ')}` : 'your /model') + tag('model'),
             'Picks the model from your first message of a brand-new chat, never mid-chat. Choose which models it may pick.',
             onOff(mine.isModelAuto, 'model'),
             mine.isModelAuto && chips('model', MODEL_NAMES, mine.models, next => void writeSetting($, { models: next.join(', ') }), true),
             'Saved as model: and models: in ~/.claude/standing-orders.md.')}
-          {control('subagents', '◇', 'Subagents', 'cyan', mine.isSubagentsAuto ? 'auto · model + effort per task' : 'same as the chat',
+          {control('subagents', '◇', 'Subagents', 'cyan', (mine.isSubagentsAuto ? 'auto · model + effort per task' : 'same as the chat') + tag('subagents'),
             'Subagents are the helper agents Claude starts for side tasks. auto picks each one\'s model (Haiku for mechanical work) and effort from its task; a model Claude already named for it wins.',
             onOff(mine.isSubagentsAuto, 'subagents'),
             undefined,
