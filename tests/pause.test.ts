@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import { parseOrders, withPaused } from '../hooks/orders'
 import { createPicks, type Host } from '../hooks/picks'
 import type { EffortView } from '../types'
-import { GLOBAL, engine, typed } from './support'
+import { GLOBAL, PANE, engine, typed } from './support'
 
 const ORDERS = 'effort: auto\nmodel: auto\nsubagents: auto\nmodels: sonnet, opus\n'
 const judged = (t: { systems: string[] }, word: string) => t.systems.filter(s => s.includes(word)).length
@@ -91,4 +91,63 @@ test('a pause only turns things off; resume does not undo the person taking effo
   expect(view.isAuto).toBe(false)
   await picks.setAuto(host, true)
   expect(view.isAuto).toBe(true)
+})
+
+test('a project pause of replies ends with /orders on, like the mode; a command typed first leaves the model pick to the first real prompt', async ($: any, on: any) => {
+  const kept: Record<string, unknown> = {}
+  const t = engine(on, {
+    orders: ORDERS,
+    judge: { model: 'opus', effort: 'high', why: 'x' },
+    handlers: {
+      'store.get': (_: unknown, e: any) => ({ value: kept[e.key] }),
+      'store.set': (_: unknown, e: any) => {
+        kept[e.key] = e.value
+        return { value: undefined }
+      },
+    },
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'orders', args: 'pause replies project' })
+  expect((await $.command.run({ command: 'orders', args: '' })).text).toContain('Standing orders: paused')
+  await $.command.run({ command: 'orders', args: 'on' })
+  expect(kept['paused:/repo']).toEqual([])
+  expect((await $.command.run({ command: 'orders', args: '' })).text).not.toContain('paused')
+
+  // /orders pause model typed as the chat's first prompt, then the first real prompt: no pick
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: '/orders pause model', command: { name: 'orders', args: 'pause model' }, origin: { kind: 'composer' }, wait: false })
+  await $.command.run({ command: 'orders', args: 'pause model' })
+  await typed($, 'Rework the scheduler and fix the deadlock', 't1', 'claude-sonnet-5-5')
+  expect(judged(t, 'NEW chat')).toBe(0)
+  expect(t.models).toEqual(['claude-sonnet-5-5'])
+})
+
+test('a command typed first (/autopilot) no longer uses up the chat\'s model pick', async ($: any, on: any) => {
+  const t = engine(on, { orders: ORDERS, judge: { model: 'opus', effort: 'high', why: 'x' } })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: '/autopilot', command: { name: 'autopilot', args: '' }, origin: { kind: 'composer' }, wait: false })
+  await typed($, 'Rework the scheduler and fix the deadlock', 't2', 'claude-sonnet-5-5')
+  expect(judged(t, 'NEW chat')).toBe(1)
+})
+
+test('the Settings Pause card pauses and resumes this session, and the Effort card says paused', async ($: any, on: any) => {
+  const t = engine(on, { orders: ORDERS })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  let pane = await $.ui.mount(PANE('terminal'))
+  await pane.press({ key: 'settings' })
+  await pane.unmount()
+  pane = await $.ui.mount(PANE('terminal'))
+  expect(await pane.find({ type: 'Text', text: /nothing paused/ })).toBeTruthy()
+  await pane.press({ key: 'pause-session' })
+  await pane.unmount()
+  pane = await $.ui.mount(PANE('terminal'))
+  expect(await pane.find({ type: 'Text', text: /this session: .*effort/ })).toBeTruthy()
+  expect(await pane.find({ type: 'Button', label: 'Resume session' })).toBeTruthy()
+  expect(await pane.find({ type: 'Text', text: /^paused$/ })).toBeTruthy()
+  await pane.press({ key: 'pause-session' })
+  await pane.unmount()
+  pane = await $.ui.mount(PANE('terminal'))
+  expect(await pane.find({ type: 'Text', text: /nothing paused/ })).toBeTruthy()
+  await pane.unmount()
+  expect(t.written).toEqual([])
 })

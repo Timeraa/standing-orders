@@ -155,10 +155,14 @@ async function loadStats($: EngineInterface, now: number) {
 const runStat = ($: EngineInterface, r: { who: 'chat' | 'agent'; usage: (Usage & { model: string }) | null | undefined; wouldModel?: string; ranEffort?: unknown; wouldEffort?: unknown; arm?: 'auto' | 'held' | undefined; switched?: boolean | undefined }) =>
   r.usage ? bump($, (l, d) => recordRun(l, d, { ...r, usage: r.usage! })) : Promise.resolve()
 
-const setPaused = ($: EngineInterface, paused: boolean) => update($, isPaused, () => paused)
+// Un-pausing replies (on, draft, auto, the mode's click) also ends a project pause of them, or the band would still read paused.
+async function setPaused($: EngineInterface, paused: boolean) {
+  await update($, isPaused, () => paused)
+  if (!paused && orders.paused('project').has('replies')) await pauseParts($, 'project', ['replies'], false)
+}
 async function setMode($: EngineInterface, m: 'draft' | 'auto') {
   await update($, mode, () => m)
-  await update($, isPaused, () => false)
+  await setPaused($, false)
 }
 
 // The picks module's engine: the model, the clock, the effort atom and where picks are recorded.
@@ -202,16 +206,28 @@ async function writeSetting($: EngineInterface, pairs: Settings) {
 const EFFORT_CHOICES = ['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'off'] as const
 const effortChoice = () => (!orders.mine().isEffortAuto ? 'off' : (orders.mine().effortFixed ?? 'auto'))
 async function chooseEffort($: EngineInterface, choice: string) {
-  await writeSetting($, { effort: choice })
   // Off is the file's (followOrders), so editing it back to auto resumes; a choice here also ends a /effort takeover.
+  // Auto first: the write's followOrders then keeps a paused effort off.
   if (choice !== 'off') await picks.setAuto(pickHost($), true)
+  await writeSetting($, { effort: choice })
 }
 
 // A pause never touches the orders file: the session's is in memory, the project's in the plugin store.
 const pausedKey = (cwd: string) => `paused:${cwd}`
+// This folder's project pause as saved (another session here may have changed it). Returns whether it changed.
+async function loadProjectPause($: EngineInterface) {
+  const saved = await $.store.get(pausedKey(ctx.cwd)).catch(() => undefined)
+  const next = Array.isArray(saved) ? saved.filter((p): p is Part => PARTS.includes(p)) : []
+  const now = orders.paused('project')
+  if (next.length === now.size && next.every(p => now.has(p))) return false
+  orders.pause('project', PARTS, false)
+  orders.pause('project', next, true)
+  return true
+}
 async function pauseParts($: EngineInterface, scope: Scope, parts: readonly Part[], on: boolean) {
   // Session replies are the mode's own pause (the band's "Replies paused").
-  if (scope === 'session' && parts.includes('replies')) await setPaused($, on)
+  if (scope === 'session' && parts.includes('replies')) await update($, isPaused, () => on)
+  if (scope === 'project') await loadProjectPause($)
   const left = orders.pause(scope, scope === 'session' ? parts.filter(p => p !== 'replies') : parts, on)
   if (scope === 'project') await $.store.set(pausedKey(ctx.cwd), left)
   await applyOrders($)
@@ -230,11 +246,7 @@ const startInit = ($: EngineInterface) =>
   $.clock.after(50, () => void $.prompt.submit({ text: INIT_PROMPT, asUser: true }).catch(() => {}))
 // Paused, then draft, then auto: one click walks the whole mode.
 const cycle = async ($: EngineInterface) => {
-  if (await isRepliesPaused($)) {
-    // The mode's click also ends a project pause of replies: the band would read paused otherwise.
-    if (orders.paused('project').has('replies')) await pauseParts($, 'project', ['replies'], false)
-    return setMode($, 'draft')
-  }
+  if (await isRepliesPaused($)) return setMode($, 'draft')
   if ((await read($, mode)) === 'draft') return setMode($, 'auto')
   return setPaused($, true)
 }
@@ -246,6 +258,9 @@ const cycle = async ($: EngineInterface) => {
 async function applyOrders($: EngineInterface) {
   await update($, vitals, v => ({ ...v, hasRepoOrders: orders.hasRepo(), cacheTtlMin: orders.get().cacheTtlMin }))
   await picks.followOrders(pickHost($))
+  // A paused effort says so; once resumed, an effort still off is the person's own.
+  if (orders.paused().has('effort')) await update($, effort, v => ({ ...v, why: 'paused' }))
+  else await update($, effort, v => (!v.isAuto && v.why === 'paused' ? { ...v, why: 'yours' } : v))
 }
 
 // Re-reads the files; applies them when they changed (always, with `force`).
@@ -339,8 +354,9 @@ async function tick($: EngineInterface) {
   }))
   await update($, effort, v => ({ ...v, isSaving: rate !== null && rate >= 85 }))
 
-  // Orders written since the last load (by Claude, an editor, the Write them button) take effect now.
+  // Orders written since the last load (by Claude, an editor, the Write them button) take effect now, and so does a pause set in another session here.
   await reloadOrders($)
+  if (await loadProjectPause($)) await applyOrders($)
 
   await needsYou.expire(checkHost($), now)
   // A finished subagent's effort is no longer needed.
@@ -364,11 +380,10 @@ export const register: Register = on => {
     await $.command.register({ name: 'crew', description: 'Old name of /autopilot' })
     orders.locate({ cwd: e.cwd, globalPath: `${(await $.env.get('HOME')) ?? ''}/.claude/standing-orders.md` })
     ctx.cwd = e.cwd
-    // This project's pause, before the first prompt can pick anything. A new session's own pause starts empty.
-    const saved = await $.store.get(pausedKey(e.cwd)).catch(() => undefined)
+    // This project's pause, before the first prompt can pick anything. A new session's (or /clear's) own pause starts empty, like the mode.
     orders.pause('session', PARTS, false)
     orders.pause('project', PARTS, false)
-    orders.pause('project', Array.isArray(saved) ? saved.filter((p): p is Part => PARTS.includes(p)) : [], true)
+    await loadProjectPause($)
     await reloadOrders($, true)
     const startedAt = await $.clock.now()
     await needsYou.load(checkHost($), { cwd: e.cwd, now: startedAt })
@@ -390,7 +405,8 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     // Only the chat's first prompt picks its model, only with no history, and never over a /model the person typed.
-    if (e.origin.kind === 'composer' && e.turnId === undefined) await picks.firstPrompt(pickHost($), { text: e.text, isCommand: !!e.command })
+    // Another command typed first (/orders pause, /autopilot) leaves the pick to the first real prompt.
+    if (e.origin.kind === 'composer' && e.turnId === undefined && (!e.command || e.command.name === 'model')) await picks.firstPrompt(pickHost($), { text: e.text, isCommand: !!e.command })
     if (e.origin.kind === 'composer' && e.command?.name === 'effort') {
       // The person set effort themselves: they win until /orders effort auto.
       await picks.setAuto(pickHost($), false)

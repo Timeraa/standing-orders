@@ -1,7 +1,9 @@
 # Changelog
 
 ## Unreleased
-- **Pause for a session or a project**, without touching your orders file: `/orders pause [replies|effort|model|subagents] [project]` and `/orders resume …`, plus a Pause card on the Settings tab. Before, every off switch for effort, model and subagents rewrote `~/.claude/standing-orders.md`, so it turned them off in every session and project until turned back on. A session pause ends with the session; a project pause is kept per folder in the plugin store. `/orders` lists what is paused, and paused parts say so on their Settings cards.
+- **Pause for a session or a project**, without touching your orders file: `/orders pause [replies|effort|model|subagents] [project]` and `/orders resume …`, plus a Pause card on the Settings tab. Before, every off switch for effort, model and subagents rewrote `~/.claude/standing-orders.md`, so it turned them off in every session and project until turned back on. A session pause ends with the session (`/clear` starts a new one); a project pause is kept per folder in the plugin store, and every open session in that folder picks it up within seconds. `/orders on`, draft, auto and the mode click also end a project pause of replies. `/orders` lists what is paused, and paused parts say so on their Settings cards.
+- A command typed as a chat's first prompt (`/autopilot`, `/orders pause model`) no longer uses up that chat's model pick; the first real prompt picks it. A `/model` typed first still steps it aside.
+- The status line and the Now tab say `(paused)` for a paused effort instead of `(yours)`.
 - `/orders subagents auto|off`: subagents had only a Settings button.
 - Effort auto comes back when the orders turn it back on (an edited file, or a resume), unless you took effort over with `/effort`. Before, once off it stayed off until `/orders effort auto`.
 
