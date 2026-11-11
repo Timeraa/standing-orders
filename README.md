@@ -76,6 +76,7 @@ Sections are bordered cards that light up under the pointer. Motion is calm: a s
 
 **Settings** (every click saves to your orders file; each card says which lines of the file it writes)
 
+- **Pause**: turn everything off for this session or this project, and back on, without changing your orders file (see Pause below);
 - **Effort**: a button cycles auto, each level and off; with auto, buttons step the floor and ceiling or reset them;
 - **New chats** and **Subagents**: turn auto model and auto subagents on or off; choose which models a new chat may pick from;
 - **Replies**: how many answers auto mode sends in a row, and your always-ask words (click one to remove it, type to add);
@@ -92,10 +93,13 @@ Commands, few on purpose:
 /orders help         the whole mod in plain words
 /orders init         have Claude write this repo's own orders
 /orders auto|draft   send answers yourself, or leave them for your Enter
-/orders on|off       resume or pause
+/orders on|off       resume or pause the replies
+/orders pause [parts] [project]    turn the autopilot off for a while (see Pause)
+/orders resume [parts] [project]   turn it back on
 /orders effort auto|off|low|medium|high|xhigh|max   auto, off, or a fixed level
 /orders effort min|max <level>                       bound what auto may pick
 /orders model auto|off   pick the model for a brand-new chat
+/orders subagents auto|off   pick a subagent's model and effort
 /orders setup        open the Settings tab
 /orders savings      open the Savings tab
 /autopilot           the pane (/crew is its old name for now)
@@ -123,6 +127,19 @@ band: mode, answered, effort, ctx, cache, hint, autopilot
 ```
 
 A repo's file can come from any clone, so it may only tighten things: its `always-ask` words add to yours, its `max-auto` can only lower yours, and it may set `effort: off` and `cache-ttl`. Every other setting is read from your own file alone.
+
+## Pause
+
+Every setting in your orders file applies to every session and every project. To turn the autopilot off for a while without editing it:
+
+```
+/orders pause                     everything, this session only
+/orders pause effort model        only those parts (replies, effort, model, subagents)
+/orders pause project             everything, in this folder, for every session here
+/orders resume [parts] [project]  undo it
+```
+
+A session pause ends with the session (a `/clear` starts a new one). A project pause is kept in the plugin's store for that folder (not in any file of the repo) until you resume it. `/orders` lists what is paused, the Settings tab has a Pause card (pause everything for the session or the project, or click single parts in either row), and the paused parts read "paused" on their cards. A pause only turns things off: resuming never undoes a `/effort` or `/model` you typed, and a chat that is already on its picked model stays on it.
 
 ## Effort
 

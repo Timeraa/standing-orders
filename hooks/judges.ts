@@ -231,6 +231,12 @@ When to use what:
 - At the keyboard ............ leave it on draft
 - Walking away from a long job  /orders auto, then /orders draft when back
 - Exploring, want every question /orders off (or Pause), /orders on later
+- Autopilot off for a while ... /orders pause (everything, this session only;
+                                 your orders file is not changed). Name parts to
+                                 pause only those: /orders pause effort model.
+                                 Add "project" to keep it paused in this folder
+                                 for every session: /orders pause project.
+                                 /orders resume [parts] [project] undoes it
 - First time in a repo ........ /orders init (Claude writes the repo's orders)
 - What is it doing? ........... /autopilot, Now tab (what needs you, what the
                                  orders did and picked, context and limits)
@@ -275,7 +281,7 @@ Setting /effort yourself turns it off; /orders effort auto turns it back on.
 
 Subagents: with "subagents: auto", each helper subagent gets a model (Haiku
 allowed) and effort picked from its task. A model or effort you or Claude named
-for it always wins.
+for it always wins. /orders subagents auto|off.
 
 Files:
 - ~/.claude/standing-orders.md: your rules for every repo, plus the settings

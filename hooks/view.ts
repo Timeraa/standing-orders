@@ -177,7 +177,7 @@ export function bandView(s: Snapshot, o: { columns?: number }): BandView {
     effort: {
       isJudging: ev.isJudging,
       text: ev.level
-        ? `${ev.model ? `${cap(ev.model)}${isNarrow ? '·' : ' · '}` : ''}${cap(ev.level)}${ev.isAuto ? '' : isNarrow ? '*' : ' (yours)'}${ev.isSaving ? ' · capped' : ''}`
+        ? `${ev.model ? `${cap(ev.model)}${isNarrow ? '·' : ' · '}` : ''}${cap(ev.level)}${ev.isAuto ? '' : isNarrow ? '*' : ev.why === 'paused' ? ' (paused)' : ' (yours)'}${ev.isSaving ? ' · capped' : ''}`
         : '',
       color: effortColor(ev.level),
     },
@@ -315,7 +315,7 @@ export function paneView(s: PaneSnapshot, o: { columns?: number; fx: boolean; no
             title: `${ev.model ? `${cap(ev.model)} · ` : ''}${cap(ev.level)}`,
             note:
               !ev.isAuto || has(ev.why) || ev.isSaving
-                ? `${!ev.isAuto ? 'set by you' : has(ev.why) ? ev.why : ''}${ev.isSaving ? `${has(ev.why) ? ' · ' : ''}capped by usage limit` : ''}`
+                ? `${!ev.isAuto ? (ev.why === 'paused' ? 'paused' : 'set by you') : has(ev.why) ? ev.why : ''}${ev.isSaving ? `${has(ev.why) ? ' · ' : ''}capped by usage limit` : ''}`
                 : null,
           }
         : { kind: 'none' },
