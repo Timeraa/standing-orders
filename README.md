@@ -139,7 +139,7 @@ Every setting in your orders file applies to every session and every project. To
 /orders resume [parts] [project]  undo it
 ```
 
-A session pause ends with the session (a `/clear` starts a new one). A project pause is kept in the plugin's store for that folder (not in any file of the repo) until you resume it. `/orders` lists what is paused, the Settings tab has a Pause card with a button for each, and the paused parts read "paused" on their cards. A pause only turns things off: resuming never undoes a `/effort` or `/model` you typed, and a chat that is already on its picked model stays on it.
+A session pause ends with the session (a `/clear` starts a new one). A project pause is kept in the plugin's store for that folder (not in any file of the repo) until you resume it. `/orders` lists what is paused, the Settings tab has a Pause card (pause everything for the session or the project, or click single parts in either row), and the paused parts read "paused" on their cards. A pause only turns things off: resuming never undoes a `/effort` or `/model` you typed, and a chat that is already on its picked model stays on it.
 
 ## Effort
 

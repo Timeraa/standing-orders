@@ -148,6 +148,12 @@ test('the Settings Pause card pauses and resumes this session, and the Effort ca
   await pane.unmount()
   pane = await $.ui.mount(PANE('terminal'))
   expect(await pane.find({ type: 'Text', text: /nothing paused/ })).toBeTruthy()
+  // one part, one scope
+  await pane.press({ key: 'pause-project-model' })
+  await pane.unmount()
+  pane = await $.ui.mount(PANE('terminal'))
+  expect(await pane.find({ type: 'Text', text: /this project: model/ })).toBeTruthy()
+  expect(await pane.find({ type: 'Button', label: '⏸ model', key: 'pause-project-model' })).toBeTruthy()
   await pane.unmount()
   expect(t.written).toEqual([])
 })

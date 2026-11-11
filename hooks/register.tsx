@@ -1049,14 +1049,26 @@ export const register: Register = on => {
           )}
           {control('pause', '❚❚', 'Pause', 'gray',
             (['session', 'project'] as const).map(sc => pausedIn(sc).length ? `${sc === 'session' ? 'this session' : 'this project'}: ${pausedIn(sc).join(', ')}` : '').filter(Boolean).join(' · ') || 'nothing paused',
-            'Turns replies, effort, model and subagents off for a while without changing your orders file. Per part: /orders pause effort model [project].',
+            'Turns replies, effort, model and subagents off for a while without changing your orders file. The buttons pause everything; click a part below to pause only that (⏸ paused).',
             (
               <Box gap={1}>
                 <Button key="pause-session" label={isAllPaused('session') ? 'Resume session' : 'This session'} onPress={() => pauseParts($, 'session', PARTS, !isAllPaused('session'))} />
                 <Button key="pause-project" label={isAllPaused('project') ? 'Resume project' : 'This project'} onPress={() => pauseParts($, 'project', PARTS, !isAllPaused('project'))} />
               </Box>
             ),
-            undefined,
+            (
+              <Box flexDirection="column">
+                {(['session', 'project'] as const).map(sc => (
+                  <Box key={`pause-row-${sc}`} flexWrap="wrap" columnGap={1}>
+                    <Text dimColor>{sc === 'session' ? 'This session:' : 'This project:'}</Text>
+                    {PARTS.map(part => {
+                      const isOn = pausedIn(sc).includes(part)
+                      return <Button key={`pause-${sc}-${part}`} dimColor={!isOn} label={`${isOn ? '⏸' : '○'} ${part}`} onPress={() => pauseParts($, sc, [part], !isOn)} />
+                    })}
+                  </Box>
+                ))}
+              </Box>
+            ),
             'A session pause ends with the session; a project pause is kept for this folder until you resume it.')}
           {control('effort', '◆', 'Effort', effortColor(ev.level) ?? 'magenta',
             `${held.has('effort') ? 'paused' : !ev.isAuto ? 'yours' : mine.effortFixed ? `${mine.effortFixed} (fixed)` : `auto ${mine.effortMin}–${mine.effortMax}`}`,
