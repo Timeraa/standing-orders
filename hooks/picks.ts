@@ -52,6 +52,9 @@ export type Host = {
   /** The session tally; `key` is the level or model (ignored for `subagents`). */
   tally(kind: 'effort' | 'models' | 'subagents', key?: string): Promise<unknown>
   toast(text: string): unknown
+  /** The model the previous chat's first request ran on (null before any); saved across chats. */
+  lastModel(): Promise<string | null>
+  setLastModel(model: string): Promise<void>
 }
 
 // ---- the deadline -------------------------------------------------------
@@ -182,8 +185,12 @@ export function createPicks(orders: () => Orders) {
   // Waits briefly for the first prompt's pick, then pins the chat to it.
   async function pickModel(host: Host, base: string) {
     const job = modelJob
-    if (!job) return
     modelJob = null
+    // The model the previous chat started on. A different one now means the person ran /model since
+    // (a /clear then /model): no event reliably says so, so the model itself is the evidence. Respect it.
+    const last = await host.lastModel()
+    if (last !== base) await host.setLastModel(base)
+    if (!job || (last !== null && last !== base)) return
     const picked = await within(host, job)
     if (!picked || shortModel(base) === picked.model) return
     // An alias: the engine resolves it to the family's newest model.
@@ -192,6 +199,13 @@ export function createPicks(orders: () => Orders) {
   }
 
   return {
+    /** A new chat (a session start, e.g. after /clear): its first prompt may pick the model again. */
+    startChat() {
+      isModelChecked = false
+      modelJob = null
+      chatModel = null
+    },
+
     /**
      * Who runs effort. The person (or `effort: off`) sets it off, `/orders effort auto` or a
      * level sets it on. Off, no level is applied until it is on and judged again.

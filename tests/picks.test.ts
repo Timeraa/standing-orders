@@ -15,6 +15,8 @@ function rig(orders: string, say: (req: Ask) => Say, o: { saving?: boolean; cont
     notes: [] as [string, string][],
     tallies: [] as [string, string | undefined][],
     toasts: [] as string[],
+    /** The model the chat's last first request ran on: the fake's saved value. */
+    lastModel: null as string | null,
     picks: createPicks(() => parseOrders(orders)),
     host: undefined as unknown as Host,
     /** Time passes: every pending deadline fires. */
@@ -34,6 +36,8 @@ function rig(orders: string, say: (req: Ask) => Say, o: { saving?: boolean; cont
     note: async (kind, text) => void t.notes.push([kind, text]),
     tally: async (kind, key) => void t.tallies.push([kind, key]),
     toast: text => void t.toasts.push(text),
+    lastModel: async () => t.lastModel,
+    setLastModel: async model => void (t.lastModel = model),
   }
   t.host = host
   return t

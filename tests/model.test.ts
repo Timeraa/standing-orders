@@ -27,6 +27,33 @@ test('a new chat picks its model once, from the first prompt', async ($: any, on
   expect(seen.models).toEqual(['opus', 'opus', 'claude-haiku-5-5'])
 })
 
+// /clear, then /model fable, then the first prompt: the chat starts on Fable, not on Haiku's pick.
+// The mod sees no /model event for it, so the model the new chat starts on is the evidence.
+test('a /clear then /model fable chat is not picked over', async ($: any, on: any) => {
+  const memory: Record<string, unknown> = {}
+  const t = engine(on, {
+    orders: 'model: auto\nmodels: sonnet, opus, fable\n',
+    repoOrders: 'model: auto\nmodels: sonnet, opus, fable\n',
+    judge: { model: 'opus', effort: 'low', why: 'hard' },
+    handlers: {
+      'store.get': (_, e: any) => ({ value: memory[e.key] }),
+      'store.set': (_, e: any) => {
+        memory[e.key] = e.value
+        return { value: undefined }
+      },
+    },
+  })
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  await typed($, 'Rework the scheduler and fix the deadlock', 't1', 'claude-sonnet-5-5')
+  expect(t.systems.filter(s => s.includes('NEW chat')).length).toBe(1)
+
+  await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })
+  // The judge still answers (the pick is decided at the first request); its answer is dropped, so no pin.
+  await typed($, 'Diagnose the vehicle routing', 't2', 'claude-fable-5-2')
+
+  expect(t.models).toEqual(['opus', 'claude-fable-5-2'])
+})
+
 test('model: off leaves the model alone', async ($: any, on: any) => {
   const seen = engineWith(on, 'model: off\n')
   await $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true })

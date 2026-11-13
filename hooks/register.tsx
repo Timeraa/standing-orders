@@ -165,8 +165,14 @@ async function setMode($: EngineInterface, m: 'draft' | 'auto') {
   await setPaused($, false)
 }
 
+// The model the last chat's first request ran on. /model is saved as the default for new sessions,
+// so a chat that starts on another model than this one was switched by the person (see picks.ts).
+const LAST_MODEL_KEY = 'model:last-chat'
+
 // The picks module's engine: the model, the clock, the effort atom and where picks are recorded.
 const pickHost = ($: EngineInterface): Host => ({
+  lastModel: async () => ((await $.store.get(LAST_MODEL_KEY).catch(() => null)) as string | null) ?? null,
+  setLastModel: model => $.store.set(LAST_MODEL_KEY, model).then(() => undefined, () => undefined),
   complete: async ({ kind, ...req }) => {
     const r = await $.model.complete(req)
     void spend($, kind, r.usage)
@@ -371,6 +377,7 @@ const clientOf = (ui: object) => (ui as { Client: any }).Client
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const r = await next(e)
+    picks.startChat()
     // Commands first: whatever fails below, /orders and /autopilot still exist.
     await $.command.register({
       name: 'orders',
